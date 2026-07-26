@@ -1,0 +1,32 @@
+{
+    "name": "partic2/TsJsCodeMirrorNotebook",
+    "loaders": [
+        {
+            "name": "copyFiles",
+            "include": [
+                "assets/**/*"
+            ]
+        },
+        {
+            "name": "typescript"
+        }
+    ],
+    "description": "",
+    "extra": {
+        "partic2/packageManager/registry": {
+            "webui": {
+                "entry": "partic2/TsJsCodeMirrorNotebook/webui",
+                "label": "partic2/TsJsCodeMirrorNotebook"
+            },
+            "dependencies": [
+                "partic2/typescriptLanguageServer2026","partic2/codemirror2026"
+            ],
+            "repositories": {
+                "partic2": [
+                    "https://gitee.com/partic/pxseed-${subname}.git",
+                    "https://github.com/partic2/pxseed-${subname}.git"
+                ]
+            }
+        }
+    }
+}
