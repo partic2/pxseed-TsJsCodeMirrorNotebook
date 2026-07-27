@@ -11,7 +11,7 @@ import { ObjectViewer } from 'partic2/CodeRunner/Component1';
 import { text2html } from 'partic2/pComponentUi/utils';
 import { FlattenArraySync,DebounceCall, ThrottleCall, Singleton } from 'partic2/CodeRunner/jsutils2';
 import type { Transport } from 'partic2/codemirror2026/lsp-client/index';
-import { PxseedExtendLanguageServer } from 'partic2/typescriptLanguageServer2026/pxseedutils/lspproxy'
+import { LanguageServerConnection, PxseedExtendLanguageServer } from 'partic2/typescriptLanguageServer2026/pxseedutils/lspproxy'
 import type { RequestMessage, NotificationMessage, ResponseMessage } from 'vscode-jsonrpc/lib/common/messages';
 import * as cmlsp from 'partic2/codemirror2026/lsp-client/index'
 import * as codemirror from 'codemirror';
@@ -22,12 +22,6 @@ let __name__=requirejs.getLocalRequireModule(require);
 export var css={
     inputCell:GenerateRandomString(),
     outputCell:GenerateRandomString(),
-}
-
-interface LspConn {
-    writeMessage(msg: string): Promise<void>;
-    readMessage(): Promise<string>;
-    close(): Promise<void>;
 }
 
 interface CodeCellProps{
@@ -73,26 +67,11 @@ DynamicPageCSSManager.PutCss('.'+css.inputCell,[
 
 let lspConsole=new ReactRefEx<{info:(a:{summary:string,detail:string})=>void,warn:(a:{summary:string,detail:string})=>void}>();
 
-class CmLspTransport implements Transport {
-    extendLanguageServer:PxseedExtendLanguageServer
-    constructor(lspserver: LspConn) {
-        this.extendLanguageServer=new PxseedExtendLanguageServer({
-            async send(message: RequestMessage | NotificationMessage): Promise<void> {
-                let encmsg=JSON.stringify(message);
-                lspConsole.current?.info({summary:'SEND ENCODED DATA',detail:encmsg})
-                await lspserver.writeMessage(encmsg);
-            },
-            async receive(): Promise<ResponseMessage | NotificationMessage> {
-                let encmsg=await lspserver.readMessage();
-                lspConsole.current?.info({summary:'RECV ENCODED DATA',detail:encmsg})
-                return JSON.parse(encmsg)
-            },
-            close(){lspserver.close();}
-        })
-    }
+class CmLspTransport<T extends LanguageServerConnection> implements Transport {
+    constructor(public lspconn: T) {}
     async send(message: string) {
         let request=JSON.parse(message);
-        await this.extendLanguageServer.send(request);
+        await this.lspconn.send(request);
         lspConsole.current?.info({summary:`SEND ${request.method}`,detail:message});
     }
     cb: ((value: string) => void) | null = null;
@@ -100,7 +79,7 @@ class CmLspTransport implements Transport {
         if (this.cb == null) return;
         let cb = this.cb;
         while (this.cb == cb) {
-            let msg = await this.extendLanguageServer.receive();
+            let msg = await this.lspconn.receive();
             let summary='undefined'
             if('method' in msg){
                 summary=msg.method;
@@ -325,8 +304,9 @@ let notebookLspClient=new Singleton(async ()=>{
     let rpc1=await (await getPersistentRegistered(ServerHostWorker1RpcName))!.ensureConnected();
     let remoteLspConnection=await importRemoteModule(rpc1,'partic2/typescriptLanguageServer2026/lsp-connection') as typeof import('partic2/typescriptLanguageServer2026/lsp-connection')
     let remoteWWWRoot=await easyCallRemoteJsonFunction(rpc1,'partic2/jsutils1/webutils','getWWWRoot',[]) as string;
-    await (await serverSide.get()).preparePxseedNotebookLspEnviron();
-    let lsptransport=new CmLspTransport(await remoteLspConnection.createLspConnection({showMessageLevel:2}));
+    let serverSide1=await serverSide.get();
+    serverSide1.preparePxseedNotebookLspEnviron();
+    let lsptransport=new CmLspTransport(await serverSide1.getTypescriptProxyLsp());
     let client = new cmlsp.LSPClient({ extensions: cmlsp.languageServerExtensions() }).connect(lsptransport);
     await client.initializing;
     return {lsptransport,client};
@@ -342,14 +322,15 @@ export class CodeMirrorCellList extends DefaultCodeCellList{
         super(props,ctx);
         (async ()=>{
             this.lspClient=(await notebookLspClient.get()).client;
-            this.remoteNotebookFile.setResult(await (await serverSide.get()).newTempNotebookFileForLsp());
+            let notebookFile=await (await serverSide.get()).newTempNotebookFileForLsp();
+            this.remoteNotebookFile.setResult(notebookFile);
             this.setState({});
         })();
     }
     async newCell(afterCellKey?: string): Promise<string> {
         let k=await super.newCell(afterCellKey);
         let {lsptransport}=await notebookLspClient.get();
-        let filePart=await lsptransport.extendLanguageServer.allocateFilePart((await this.remoteNotebookFile.get()).uri)
+        let filePart=await lsptransport.lspconn.allocateFilePart((await this.remoteNotebookFile.get()).uri)
         this.cellsLspInfo.set(k,{lspobj:{id:filePart.id,uri:filePart.uri}});
         return k;
     }

@@ -2,6 +2,8 @@ import { GenerateRandomString, requirejs } from "partic2/jsutils1/base";
 import { path } from "partic2/jsutils1/webutils";
 import { defaultFileSystem, ensureDefaultFileSystem, getSimpleFileSysteNormalizedWWWRoot } from "partic2/CodeRunner/JsEnviron";
 import { utf8conv } from "partic2/CodeRunner/jsutils2";
+import { PxseedExtendLanguageServer } from "partic2/typescriptLanguageServer2026/pxseedutils/lspproxy";
+import { initNotebookCodeEnv } from "../JsNotebook/workerinit";
 
 
 
@@ -78,4 +80,21 @@ export async function delTempNotebookFileForLsp(file:{id:string}){
         tempNotebookFile.delete(file.id);
     }
 }
+
+export async function getTypescriptProxyLsp(){
+    let lspc=await import('partic2/typescriptLanguageServer2026/lsp-connection');
+    let conn=await lspc.createLspConnection({showMessageLevel:2});
+    return new PxseedExtendLanguageServer({
+        async send(message: any): Promise<void> {
+            let encmsg=JSON.stringify(message);
+            await conn.writeMessage(encmsg);
+        },
+        async receive(): Promise<any> {
+            let encmsg=await conn.readMessage();
+            return JSON.parse(encmsg)
+        },
+        close(){conn.close();}
+    })
+}
+
 
