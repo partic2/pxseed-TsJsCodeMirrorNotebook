@@ -24,6 +24,9 @@ export async function main(args:string){
 
 
 class CodeMirrorNotebook extends NotebookViewer{
+    async useRpc(rpc?: { name: string | null; }): Promise<void> {
+        await super.useRpc(rpc);
+    }
     protected renderCodeCellList(): React.JSX.Element {
         return <CodeMirrorCellList codeContext={this.codeContext!} ref={this.rref.ccl} cellProps={{
             onInputChange:(target)=>this.onCellInputChange(target)

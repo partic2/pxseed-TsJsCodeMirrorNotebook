@@ -317,12 +317,18 @@ let notebookLspClient=new Singleton(async ()=>{
 export class CodeMirrorCellList extends DefaultCodeCellList{
     protected cellsLspInfo=new Map<string,{lspobj:{id:string,uri:string}}>();
     protected remoteNotebookFile=new future<{id:string,uri:string}>();
+    protected headCell?:{id:string,uri:string}
     protected lspClient?:cmlsp.LSPClient;
+    protected lspProxy?:PxseedExtendLanguageServer;
     constructor(props:any,ctx:any){
         super(props,ctx);
         (async ()=>{
-            this.lspClient=(await notebookLspClient.get()).client;
+            let t1=await notebookLspClient.get();
+            this.lspClient=t1.client;
+            this.lspProxy=t1.lsptransport.lspconn;
             let notebookFile=await (await serverSide.get()).newTempNotebookFileForLsp();
+            await this.lspProxy!.sendDidOpen({uri:notebookFile.uri,languageId:'typescript'});
+            this.headCell=await this.lspProxy!.allocateFilePart(notebookFile.uri);
             this.remoteNotebookFile.setResult(notebookFile);
             this.setState({});
         })();
@@ -336,6 +342,27 @@ export class CodeMirrorCellList extends DefaultCodeCellList{
     }
     async deleteCell(cellKey: string): Promise<void> {
         await super.deleteCell(cellKey);
+    }
+    async changeHeadCell(content:string){
+        await this.remoteNotebookFile.get();
+        await this.lspProxy!.sendDidChange({uri:this.headCell!.uri,change:{text:content}});
+    }
+    protected beforeRender(): void {
+        super.beforeRender();
+        if(this.props.codeContext!=this.state.codeContext){
+            let codeContext=this.props.codeContext;
+            (async ()=>{
+                try{
+                    debugger
+                    await codeContext.callFunction('callModuleFunction',['partic2/TsJsCodeMirrorNotebook/notebookenv','initNotebookCodeEnv',[]]);
+                    let decls=await codeContext.callFunction('callModuleFunction',['partic2/TsJsCodeMirrorNotebook/notebookenv','getNotebookEnvAllTypeDecl',[]]) as Array<{uid:string,decl:string}>;
+                    debugger;
+                    await this.changeHeadCell(decls.map(t1=>t1.decl).join('\n\n'));
+                }catch(err){
+                    debugger
+                }
+            })();
+        }
     }
     renderCodeCell(v: { ref: ReactRefEx<CodeCellControl>; key: string; }, index: number, cellCssStyle: React.AllCSSProperties): React.JSX.Element {
         if(this.cellsLspInfo.get(v.key)==undefined||this.lspClient==undefined){
