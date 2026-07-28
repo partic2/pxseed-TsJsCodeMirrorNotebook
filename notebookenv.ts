@@ -33,6 +33,7 @@ export async function initNotebookCodeEnv(_ENV?:any){
         nbexp.typeDecl.add({uid:__name__+'.ENV',decl:`
 declare function deleteVariables(name:string[]):void;
 import {Task} from 'partic2/jsutils1/base';
+
 `})
     }
 }

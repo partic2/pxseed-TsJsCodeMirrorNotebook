@@ -155,15 +155,32 @@ export class CodeMirrorCodeCell extends React.Component<CodeCellProps,CodeCellSt
         this.codemirrorEditorView.setResult(new codemirror.EditorView({
             state: cms.EditorState.create({
                 extensions: [
-                    codemirror.basicSetup, cmjs.javascript({ typescript: true }), cmv.keymap.of([
+                    codemirror.basicSetup, cmjs.javascript({ typescript: true }), cms.Prec.high(cmv.keymap.of([
                         {
                             key: 'Tab',
                             run: cmc.acceptCompletion,
                         },{
                             key:'Ctrl-Enter',
-                            run:()=>(this.runCode(),true)
+                            run:()=>{
+                                if(this.props.runCodeKey=='Ctl+Ent' || this.props.runCodeKey==undefined){
+                                    this.runCode();
+                                    return true;
+                                }else{
+                                    return false;
+                                }
+                            }
+                        },{
+                            key:'Enter',
+                            run:()=>{
+                                if(this.props.runCodeKey=='Enter'){
+                                    this.runCode();
+                                    return true;
+                                }else{
+                                    return false;
+                                }
+                            }
                         }
-                    ]),
+                    ])),
                     this.props.languageServer.client.plugin(this.props.languageServer.uri, 'typescript')
                 ],
             }),
@@ -327,7 +344,7 @@ export class CodeMirrorCellList extends DefaultCodeCellList{
             this.lspClient=t1.client;
             this.lspProxy=t1.lsptransport.lspconn;
             let notebookFile=await (await serverSide.get()).newTempNotebookFileForLsp();
-            await this.lspProxy!.sendDidOpen({uri:notebookFile.uri,languageId:'typescript'});
+            await this.lspProxy!.ensureFileDidOpen({uri:notebookFile.uri,languageId:'typescript'});
             this.headCell=await this.lspProxy!.allocateFilePart(notebookFile.uri);
             this.remoteNotebookFile.setResult(notebookFile);
             this.setState({});
@@ -338,6 +355,7 @@ export class CodeMirrorCellList extends DefaultCodeCellList{
         let {lsptransport}=await notebookLspClient.get();
         let filePart=await lsptransport.lspconn.allocateFilePart((await this.remoteNotebookFile.get()).uri)
         this.cellsLspInfo.set(k,{lspobj:{id:filePart.id,uri:filePart.uri}});
+        this.setState({});
         return k;
     }
     async deleteCell(cellKey: string): Promise<void> {
@@ -347,22 +365,20 @@ export class CodeMirrorCellList extends DefaultCodeCellList{
         await this.remoteNotebookFile.get();
         await this.lspProxy!.sendDidChange({uri:this.headCell!.uri,change:{text:content}});
     }
-    protected beforeRender(): void {
-        super.beforeRender();
-        if(this.props.codeContext!=this.state.codeContext){
-            let codeContext=this.props.codeContext;
-            (async ()=>{
-                try{
-                    debugger
-                    await codeContext.callFunction('callModuleFunction',['partic2/TsJsCodeMirrorNotebook/notebookenv','initNotebookCodeEnv',[]]);
-                    let decls=await codeContext.callFunction('callModuleFunction',['partic2/TsJsCodeMirrorNotebook/notebookenv','getNotebookEnvAllTypeDecl',[]]) as Array<{uid:string,decl:string}>;
-                    debugger;
-                    await this.changeHeadCell(decls.map(t1=>t1.decl).join('\n\n'));
-                }catch(err){
-                    debugger
-                }
-            })();
-        }
+    protected onTypescriptDeclChange=async ()=>{
+        if(this.state.codeContext==undefined)return;
+        let decls=await this.state.codeContext!.callFunction('callModuleFunction',['partic2/TsJsCodeMirrorNotebook/notebookenv','getNotebookEnvAllTypeDecl',[]]) as Array<{uid:string,decl:string}>;
+        await this.changeHeadCell(decls.map(t1=>t1.decl).join('\n\n'));
+    }
+    protected async attachCodeContext(codeContext: RunCodeContext) {
+        await super.attachCodeContext(codeContext);
+        await codeContext.callFunction('callModuleFunction',['partic2/TsJsCodeMirrorNotebook/notebookenv','initNotebookCodeEnv',[]]);
+        codeContext.event.addEventListener(path.join(__name__,'../notebookenv')+'.declChange',this.onTypescriptDeclChange);
+        this.setState({},()=>this.onTypescriptDeclChange());
+    }
+    protected async detachCodeContext(codeContext: RunCodeContext): Promise<void> {
+        await super.detachCodeContext(codeContext);
+        codeContext.event.removeEventListener(path.join(__name__,'../notebookenv')+'.declChange',this.onTypescriptDeclChange);
     }
     renderCodeCell(v: { ref: ReactRefEx<CodeCellControl>; key: string; }, index: number, cellCssStyle: React.AllCSSProperties): React.JSX.Element {
         if(this.cellsLspInfo.get(v.key)==undefined||this.lspClient==undefined){
