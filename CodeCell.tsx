@@ -299,9 +299,7 @@ export class CodeMirrorCodeCell extends React.Component<CodeCellProps,CodeCellSt
         </div>
     }
     async setAsEditTarget(){
-        if(this.codemirrorEditorView.result!=null){
-            this.codemirrorEditorView.result.focus();
-        }
+        (await this.codemirrorEditorView.get()).focus();
     }
     async close(){
         if(this.state.resultVariable!=null){

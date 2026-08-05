@@ -3,7 +3,7 @@ import { path } from "partic2/jsutils1/webutils";
 import { defaultFileSystem, ensureDefaultFileSystem, getSimpleFileSysteNormalizedWWWRoot } from "partic2/CodeRunner/JsEnviron";
 import { utf8conv } from "partic2/CodeRunner/jsutils2";
 import { PxseedExtendLanguageServer } from "partic2/typescriptLanguageServer2026/pxseedutils/lspproxy";
-import { initNotebookCodeEnv } from "../JsNotebook/workerinit";
+import { initNotebookCodeEnv } from "partic2/JsNotebook/workerinit";
 
 
 
@@ -98,3 +98,13 @@ export async function getTypescriptProxyLsp(){
 }
 
 
+export async function getEntryNotebookFilePath(){
+    await ensureDefaultFileSystem();
+    let dataDir=path.join(getSimpleFileSysteNormalizedWWWRoot(),__name__,'..','data');
+    let notebookFilePath=path.join(dataDir,'__entry.ijsnb');
+    if(await defaultFileSystem!.filetype(notebookFilePath)=='none'){
+        await defaultFileSystem!.writeAll(notebookFilePath,new Uint8Array(0));
+    }
+    await defaultFileSystem!.mkdir(dataDir);
+    return notebookFilePath;
+}
