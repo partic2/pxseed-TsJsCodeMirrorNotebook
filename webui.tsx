@@ -12,24 +12,14 @@ import { ClientInfo, getPersistentRegistered, importRemoteModule, ServerHostWork
 import { TaskLocalEnv } from 'partic2/CodeRunner/CodeContext';
 import {ServerHostWorker1Rpc} from 'partic2/pxprpcClient/registry'
 import { NotebookViewer } from 'partic2/JsNotebook/notebook';
-import { Singleton } from '../CodeRunner/jsutils2';
+import { Singleton } from 'partic2/CodeRunner/jsutils2';
+import { CodeMirrorNotebook, TypeScriptCodeFileViewer } from './FileViewer';
+import { TjsSfs } from '../CodeRunner/JsEnviron';
+import { tjsFrom } from '../tjshelper/tjsonjserpc';
 
 const __name__=requirejs.getLocalRequireModule(require);
 
 
-class CodeMirrorNotebook extends NotebookViewer{
-    async useRpc(rpc?: { name: string | null; }): Promise<void> {
-        await super.useRpc(rpc);
-    }
-    async doLoad(): Promise<void> {
-        await super.doLoad();
-    }
-    protected renderCodeCellList(): React.JSX.Element {
-        return <CodeMirrorCellList codeContext={this.codeContext!} ref={this.rref.ccl} cellProps={{
-            onInputChange:(target)=>this.onCellInputChange(target)
-        }}/>
-    }
-}
 
 export async function codeMirrorNotebookFactory(){
     return CodeMirrorNotebook
@@ -52,7 +42,11 @@ export async function main(args:string){
         let notebookFilePath=await (await serverSide.get()).getEntryNotebookFilePath();
         openNewWindow(<NotebookViewerContainer context={
             {rpc:(await getPersistentRegistered(ServerHostWorker1RpcName))!}} path={notebookFilePath} />,
-            {title:'TS/JS Notebook',layoutHint:__name__+'TS/JS Notebook entry'})
+            {title:'TS/JS Notebook',layoutHint:__name__+'TS/JS Notebook entry'});
+        let fs=new TjsSfs().from(await tjsFrom(await ServerHostWorker1Rpc.get()));
+        openNewWindow(<TypeScriptCodeFileViewer context={{rpc:await ServerHostWorker1Rpc.get(),fs}} 
+            path={'/data/sda1/user/Repository/pxseed/source/partic2/TsJsCodeMirrorNotebook/FileViewer.tsx'} initialSelect={{anchor:1200,focus:1220}} />,
+            {title:'FileViewer.tsx',layoutHint:__name__+'TS/JS Notebook entry'})
     }
 }
 
