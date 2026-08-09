@@ -4,7 +4,7 @@ import { defaultFileSystem, ensureDefaultFileSystem, getSimpleFileSysteNormalize
 import { utf8conv } from "partic2/CodeRunner/jsutils2";
 import { PxseedExtendLanguageServer } from "partic2/typescriptLanguageServer2026/pxseedutils/lspproxy";
 import { initNotebookCodeEnv } from "partic2/JsNotebook/workerinit";
-
+import type * as lspt from 'vscode-languageserver-types'
 
 
 let __name__ = requirejs.getLocalRequireModule(require);
@@ -107,4 +107,20 @@ export async function getEntryNotebookFilePath(){
     }
     await defaultFileSystem!.mkdir(dataDir);
     return notebookFilePath;
+}
+
+export async function getSummaryOfLocations(location:lspt.Location[]){
+    let result=new Array<{location:lspt.Location,summary:string}>();
+    await ensureDefaultFileSystem();
+    for(let t1 of location){
+        let path=new URL(t1.uri).pathname;
+        let t2=await defaultFileSystem!.readAll(path);
+        if(t2!=null){
+            let summary=utf8conv(t2).split(/\n/g).at(t1.range.start.line);
+            if(summary!=undefined){
+                result.push({summary,location:t1});
+            }
+        }
+    }
+    return result;
 }

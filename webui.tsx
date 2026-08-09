@@ -2,20 +2,16 @@
 import * as React from 'preact'
 import { openNewWindow } from 'partic2/pComponentUi/workspace'
 import { requirejs } from 'partic2/jsutils1/base';
-import { GetJsEntry } from 'partic2/jsutils1/webutils';
+import { GetJsEntry, path } from 'partic2/jsutils1/webutils';
 import { setBaseWindowView } from 'partic2/pComponentUi/workspace';
-import { setCodeCellListImpl } from 'partic2/CodeRunner/WebUi';
-import { CodeMirrorCellList } from './CodeCell';
-import { alert } from 'partic2/pComponentUi/window';
-import {openWorkspaceWindowFor} from 'partic2/JsNotebook/workspace'
-import { ClientInfo, getPersistentRegistered, importRemoteModule, ServerHostWorker1RpcName } from 'partic2/pxprpcClient/registry';
+import { ClientInfo, easyCallRemoteJsonFunction, getPersistentRegistered, importRemoteModule, ServerHostWorker1RpcName } from 'partic2/pxprpcClient/registry';
 import { TaskLocalEnv } from 'partic2/CodeRunner/CodeContext';
 import {ServerHostWorker1Rpc} from 'partic2/pxprpcClient/registry'
 import { NotebookViewer } from 'partic2/JsNotebook/notebook';
 import { Singleton } from 'partic2/CodeRunner/jsutils2';
 import { CodeMirrorNotebook, TypeScriptCodeFileViewer } from './FileViewer';
-import { TjsSfs } from '../CodeRunner/JsEnviron';
-import { tjsFrom } from '../tjshelper/tjsonjserpc';
+import { getSimpleFileSysteNormalizedWWWRoot, TjsSfs } from 'partic2/CodeRunner/JsEnviron';
+
 
 const __name__=requirejs.getLocalRequireModule(require);
 
@@ -43,10 +39,11 @@ export async function main(args:string){
         openNewWindow(<NotebookViewerContainer context={
             {rpc:(await getPersistentRegistered(ServerHostWorker1RpcName))!}} path={notebookFilePath} />,
             {title:'TS/JS Notebook',layoutHint:__name__+'TS/JS Notebook entry'});
-        let fs=new TjsSfs().from(await tjsFrom(await ServerHostWorker1Rpc.get()));
-        openNewWindow(<TypeScriptCodeFileViewer context={{rpc:await ServerHostWorker1Rpc.get(),fs}} 
-            path={'/data/sda1/user/Repository/pxseed/source/partic2/TsJsCodeMirrorNotebook/FileViewer.tsx'} initialSelect={{anchor:1200,focus:1220}} />,
-            {title:'FileViewer.tsx',layoutHint:__name__+'TS/JS Notebook entry'})
+        let wwwroot=await easyCallRemoteJsonFunction(ServerHostWorker1Rpc,'partic2/CodeRunner/JsEnviron','getSimpleFileSysteNormalizedWWWRoot',[])
+        let thissource=path.join(wwwroot,'../source',__name__+'.tsx');
+        openNewWindow(<TypeScriptCodeFileViewer 
+            path={thissource} initialSelect={{anchor:1200,focus:1220}} />,
+            {title:'webui.tsx'})
     }
 }
 

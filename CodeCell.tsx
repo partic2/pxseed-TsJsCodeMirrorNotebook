@@ -4,18 +4,15 @@ import { FloatLayerComponent, ReactRefEx, css as css1 } from 'partic2/pComponent
 import { CodeContextEvent, newCodeCellListData, RunCodeContext } from 'partic2/CodeRunner/CodeContext';
 import {CodeCellControl, DefaultCodeCellList} from 'partic2/CodeRunner/WebUi'
 import * as React from 'preact'
-import { DynamicPageCSSManager, globalInputState, GlobalInputStateTracer, path } from 'partic2/jsutils1/webutils';
-import { TextEditor } from 'partic2/pComponentUi/texteditor';
+import { DynamicPageCSSManager, path } from 'partic2/jsutils1/webutils';
 import { fromSerializableObject, inspectCodeContextVariable, CodeCompletionItem, ConsoleDataEventData, RemoteCodeContextInspector, ensureJavascriptInspectorForCodeContextInstalled, toSerializableObject } from 'partic2/CodeRunner/Inspector';
 import { ObjectViewer } from 'partic2/CodeRunner/Component1';
-import { text2html } from 'partic2/pComponentUi/utils';
 import { FlattenArraySync,DebounceCall, ThrottleCall, Singleton } from 'partic2/CodeRunner/jsutils2';
-import type { Transport } from 'partic2/codemirror2026/lsp-client/index';
 import { LanguageServerConnection, PxseedExtendLanguageServer } from 'partic2/typescriptLanguageServer2026/pxseedutils/lspproxy'
-import type { RequestMessage, NotificationMessage, ResponseMessage } from 'vscode-jsonrpc/lib/common/messages';
+
 import * as cmlsp from 'partic2/codemirror2026/lsp-client/index'
 import * as codemirror from 'codemirror';
-import { easyCallRemoteJsonFunction, getPersistentRegistered, importRemoteModule, ServerHostWorker1RpcName } from 'partic2/pxprpcClient/registry';
+import { defaultLspClient, serverSide } from './webuiutils';
 
 let __name__=requirejs.getLocalRequireModule(require);
 
@@ -62,43 +59,6 @@ DynamicPageCSSManager.PutCss('.'+css.inputCell,[
     'display:inline-block','border:solid black 2px','margin:2px','padding:2px','background-color:white',
     'font-family:monospace'
 ]);
-
-
-
-let lspConsole=new ReactRefEx<{info:(a:{summary:string,detail:string})=>void,warn:(a:{summary:string,detail:string})=>void}>();
-
-class CmLspTransport<T extends LanguageServerConnection> implements Transport {
-    constructor(public lspconn: T) {}
-    async send(message: string) {
-        let request=JSON.parse(message);
-        await this.lspconn.send(request);
-        lspConsole.current?.info({summary:`SEND ${request.method}`,detail:message});
-    }
-    cb: ((value: string) => void) | null = null;
-    protected async __poll() {
-        if (this.cb == null) return;
-        let cb = this.cb;
-        while (this.cb == cb) {
-            let msg = await this.lspconn.receive();
-            let summary='undefined'
-            if('method' in msg){
-                summary=msg.method;
-            }
-            lspConsole.current?.info({summary:`RECV ${summary}`,detail:JSON.stringify(msg)});
-            try{cb(JSON.stringify(msg));}catch(err:any){
-                throwIfAbortError(err);
-                lspConsole.current?.warn({summary:'LSP internal error:'+err,detail:err.stack})
-            }
-        }
-    }
-    subscribe(handler: (value: string) => void): void {
-        this.cb = handler;
-        this.__poll();
-    }
-    unsubscribe(handler: (value: string) => void): void {
-        this.cb = null;
-    }
-}
 
 
 export class CodeMirrorCodeCell extends React.Component<CodeCellProps,CodeCellStats> implements CodeCellControl{
@@ -310,25 +270,6 @@ export class CodeMirrorCodeCell extends React.Component<CodeCellProps,CodeCellSt
     }
 }
 
-let serverSide=new Singleton(async ()=>{
-    let rpc1=await (await getPersistentRegistered(ServerHostWorker1RpcName))!.ensureConnected();
-    return await importRemoteModule(rpc1,'partic2/TsJsCodeMirrorNotebook/serverSide') as typeof import('partic2/TsJsCodeMirrorNotebook/serverSide');
-});
-
-let notebookLspClient=new Singleton(async ()=>{
-    let rpc1=await (await getPersistentRegistered(ServerHostWorker1RpcName))!.ensureConnected();
-    let remoteLspConnection=await importRemoteModule(rpc1,'partic2/typescriptLanguageServer2026/lsp-connection') as typeof import('partic2/typescriptLanguageServer2026/lsp-connection')
-    let remoteWWWRoot=await easyCallRemoteJsonFunction(rpc1,'partic2/jsutils1/webutils','getWWWRoot',[]) as string;
-    let serverSide1=await serverSide.get();
-    serverSide1.preparePxseedNotebookLspEnviron();
-    let lsptransport=new CmLspTransport(await serverSide1.getTypescriptProxyLsp());
-    let client = new cmlsp.LSPClient({ extensions: cmlsp.languageServerExtensions() }).connect(lsptransport);
-    await client.initializing;
-    return {lsptransport,client};
-})
-
-
-
 export class CodeMirrorCellList extends DefaultCodeCellList{
     protected cellsLspInfo=new Map<string,{lspobj:{id:string,uri:string}}>();
     protected remoteNotebookFile=new future<{id:string,uri:string}>();
@@ -338,8 +279,8 @@ export class CodeMirrorCellList extends DefaultCodeCellList{
     constructor(props:any,ctx:any){
         super(props,ctx);
         (async ()=>{
-            let t1=await notebookLspClient.get();
-            this.lspClient=t1.client;
+            let t1=await defaultLspClient.get();
+            this.lspClient=t1.cmclient;
             this.lspProxy=t1.lsptransport.lspconn;
             let notebookFile=await (await serverSide.get()).newTempNotebookFileForLsp();
             await this.lspProxy!.ensureFileDidOpen({uri:notebookFile.uri,languageId:'typescript'});
@@ -350,7 +291,7 @@ export class CodeMirrorCellList extends DefaultCodeCellList{
     }
     async newCell(afterCellKey?: string): Promise<string> {
         let k=await super.newCell(afterCellKey);
-        let {lsptransport}=await notebookLspClient.get();
+        let {lsptransport}=await defaultLspClient.get();
         let filePart=await lsptransport.lspconn.allocateFilePart((await this.remoteNotebookFile.get()).uri)
         this.cellsLspInfo.set(k,{lspobj:{id:filePart.id,uri:filePart.uri}});
         this.setState({});
