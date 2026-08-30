@@ -41,9 +41,6 @@ export async function main(args:string){
             {title:'TS/JS Notebook',layoutHint:__name__+'TS/JS Notebook entry'});
         let wwwroot=await easyCallRemoteJsonFunction(ServerHostWorker1Rpc,'partic2/CodeRunner/JsEnviron','getSimpleFileSysteNormalizedWWWRoot',[])
         let thissource=path.join(wwwroot,'../source',__name__+'.tsx');
-        openNewWindow(<TypeScriptCodeFileViewer 
-            path={thissource} initialSelect={{anchor:1200,focus:1220}} />,
-            {title:'webui.tsx'})
     }
 }
 

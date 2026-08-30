@@ -1,10 +1,12 @@
 import { GenerateRandomString, requirejs } from "partic2/jsutils1/base";
 import { path } from "partic2/jsutils1/webutils";
 import { defaultFileSystem, ensureDefaultFileSystem, getSimpleFileSysteNormalizedWWWRoot } from "partic2/CodeRunner/JsEnviron";
-import { utf8conv } from "partic2/CodeRunner/jsutils2";
+import { Singleton, utf8conv } from "partic2/CodeRunner/jsutils2";
 import { PxseedExtendLanguageServer } from "partic2/typescriptLanguageServer2026/pxseedutils/lspproxy";
-import { initNotebookCodeEnv } from "partic2/JsNotebook/workerinit";
 import type * as lspt from 'vscode-languageserver-types'
+import { RpcExtendClient1 } from "pxprpc/extend";
+import { Client } from "pxprpc/base";
+import { getAttachedRemoteRigstryFunction, importRemoteModule, RpcWorker } from "partic2/pxprpcClient/pxseedremotefuncs";
 
 
 let __name__ = requirejs.getLocalRequireModule(require);
@@ -81,8 +83,27 @@ export async function delTempNotebookFileForLsp(file:{id:string}){
     }
 }
 
+async function languageServerThreadFactory(){
+    let worker=new RpcWorker(__name__+'.languageServerThread');
+    let conn=await worker.ensureConnection();
+    let client=new RpcExtendClient1(new Client(conn));
+    await client.init();
+    return client;
+}
+export let languageServerThread=new Singleton(languageServerThreadFactory)
+
+
+export async function closeLanguageServerThread(){
+    if(languageServerThread.done){
+        let lst=await languageServerThread.get();
+        let func=await getAttachedRemoteRigstryFunction(lst);
+        await func.jsExec(`globalThis.close()`,null).catch(()=>{});
+        languageServerThread=new Singleton(languageServerThreadFactory);
+    }
+}
+
 export async function getTypescriptProxyLsp(){
-    let lspc=await import('partic2/typescriptLanguageServer2026/lsp-connection');
+    let lspc=await importRemoteModule(languageServerThread,'partic2/typescriptLanguageServer2026/lsp-connection') as typeof import('partic2/typescriptLanguageServer2026/lsp-connection')
     let conn=await lspc.createLspConnection({showMessageLevel:2});
     return new PxseedExtendLanguageServer({
         async send(message: any): Promise<void> {

@@ -13,6 +13,7 @@ import { LanguageServerConnection, PxseedExtendLanguageServer } from 'partic2/ty
 import * as cmlsp from 'partic2/codemirror2026/lsp-client/index'
 import * as codemirror from 'codemirror';
 import { defaultLspClient, serverSide } from './webuiutils';
+import { openNewWindow } from 'partic2/pComponentUi/workspace';
 
 let __name__=requirejs.getLocalRequireModule(require);
 
@@ -112,37 +113,73 @@ export class CodeMirrorCodeCell extends React.Component<CodeCellProps,CodeCellSt
         let cmjs=await import('@codemirror/lang-javascript');
         let cmv=await import('@codemirror/view');
         let cmc=await import('@codemirror/autocomplete');
+        let extensions=[
+            codemirror.basicSetup, cmjs.javascript({ typescript: true }), cms.Prec.high(cmv.keymap.of([
+                {
+                    key: 'Tab',
+                    run: cmc.acceptCompletion,
+                },{
+                    key:'Ctrl-Enter',
+                    run:()=>{
+                        if(this.props.runCodeKey=='Ctl+Ent' || this.props.runCodeKey==undefined){
+                            this.runCode();
+                            return true;
+                        }else{
+                            return false;
+                        }
+                    }
+                },{
+                    key:'Enter',
+                    run:()=>{
+                        if(this.props.runCodeKey=='Enter'){
+                            this.runCode();
+                            return true;
+                        }else{
+                            return false;
+                        }
+                    }
+                }
+            ])),
+            this.props.languageServer.client.plugin(this.props.languageServer.uri, 'typescript')
+        ];
+        let lsp=await defaultLspClient.get();
+        extensions.push(cmv.EditorView.domEventHandlers({
+            click:(event,eview)=>{
+                (async ()=>{
+                    const isCtrlPressed = event.ctrlKey || event.metaKey;
+                    if (isCtrlPressed && event.button === 0) {
+                        const pos = eview.posAtCoords({ x: event.clientX, y: event.clientY });
+                        if (pos === null) return;
+                        const line=eview.state.doc.lineAt(pos);
+                        const character=pos-line.from;
+                        let def1=await lsp.lspproxy.getFilePartDefinition({line:line.number-1,character,textDocument:{uri:this.props.languageServer.uri}});
+                        for(let t1 of def1){
+                            //Typescript language server issue.
+                            t1.uri=decodeURIComponent(t1.uri);
+                        }
+                        let serverSideImpl=await serverSide.get();
+                        let summary=await serverSideImpl.getSummaryOfLocations(def1);
+                        let {TypeScriptCodeFileViewer}=await import('./FileViewer')
+                        openNewWindow(<div>{
+                            summary.map(t1=><a href="javascript:;" onClick={async ()=>{
+                                openNewWindow(<TypeScriptCodeFileViewer path={new URL(t1.location.uri).pathname}
+                                initialSelect={{
+                                    anchor:t1.location.range.start,
+                                    focus:t1.location.range.end
+                                }}
+                                />,{title:t1.location.uri.substring(t1.location.uri.lastIndexOf('/'))})
+                            }}>
+                                <div>{t1.location.uri}</div>
+                                <div>{t1.summary}</div>
+                            </a>)
+                        }</div>,{title:'definition'})
+                    }
+                })();
+            }
+        }));
         this.codemirrorEditorView.setResult(new codemirror.EditorView({
             state: cms.EditorState.create({
-                extensions: [
-                    codemirror.basicSetup, cmjs.javascript({ typescript: true }), cms.Prec.high(cmv.keymap.of([
-                        {
-                            key: 'Tab',
-                            run: cmc.acceptCompletion,
-                        },{
-                            key:'Ctrl-Enter',
-                            run:()=>{
-                                if(this.props.runCodeKey=='Ctl+Ent' || this.props.runCodeKey==undefined){
-                                    this.runCode();
-                                    return true;
-                                }else{
-                                    return false;
-                                }
-                            }
-                        },{
-                            key:'Enter',
-                            run:()=>{
-                                if(this.props.runCodeKey=='Enter'){
-                                    this.runCode();
-                                    return true;
-                                }else{
-                                    return false;
-                                }
-                            }
-                        }
-                    ])),
-                    this.props.languageServer.client.plugin(this.props.languageServer.uri, 'typescript')
-                ],
+                extensions ,
             }),
             parent: div1
         }));
@@ -230,6 +267,20 @@ export class CodeMirrorCodeCell extends React.Component<CodeCellProps,CodeCellSt
             this.codeContext.event.addEventListener(`${__name__}.CodeCell.callWebuiFunction`,this.codeContextCallMethodEvent);
         }
     }
+    renderCellInput(){
+        return <div ref={this.rref.codeMirrorContainer}></div>
+    }
+    renderCellOutput(){
+        return [
+            <div>{this.state.errorCatched!=null?'THROW:':null}</div>,
+            <div style={{overflow:'auto'}}>
+                {this.state.cellOutput===undefined?null:<ObjectViewer 
+                    object={this.state.cellOutput} name={''} codeContext={this.codeContext!} 
+                    variableName={this.state.resultVariable??undefined} 
+                />}
+            </div>
+        ]
+    }
     render(props?: Readonly<React.Attributes & { children?: React.ComponentChildren; ref?: React.Ref<any> | undefined; }> | undefined, state?: Readonly<{}> | undefined, context?: any): React.ComponentChild {
         this.beforeRender();
         return <div style={{display:'flex',flexDirection:'column',position:'relative',...this.props.divStyle}} ref={this.rref.container} 
@@ -247,15 +298,12 @@ export class CodeMirrorCodeCell extends React.Component<CodeCellProps,CodeCellSt
                     }
                 }}
             >
-            <div ref={this.rref.codeMirrorContainer}></div>
+            {this.renderCellInput()}
             {this.state.focusin?<div style={{position:'relative',display:'flex',flexDirection:'row-reverse'}}>
             <div style={{position:'absolute',backgroundColor:'white',maxWidth:'50%',wordBreak:'break-all'}}>
                 <div>{this.renderActionButton()}</div>
             </div></div>:null}
-            <div>{this.state.errorCatched!=null?'THROW:':null}</div>
-            <div style={{overflow:'auto'}}>
-                <ObjectViewer object={this.state.cellOutput} name={''} codeContext={this.codeContext!} variableName={this.state.resultVariable??undefined} />
-            </div>
+            {this.renderCellOutput()}
         </div>
     }
     async setAsEditTarget(){
