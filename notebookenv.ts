@@ -1,4 +1,4 @@
-import { CodeContextEvent, TaskLocalEnv } from "partic2/CodeRunner/CodeContext";
+import { CodeContextEvent, LocalRunCodeContext, TaskLocalEnv } from "partic2/CodeRunner/CodeContext";
 import { GenerateRandomString, requirejs, WaitUntil } from "partic2/jsutils1/base";
 import { getTypescriptModuleTjs } from "partic2/packageManager/nodecompat";
 
@@ -12,10 +12,11 @@ export async function initNotebookCodeEnv(_ENV?:any){
     }
     let ts=await getTypescriptModuleTjs();
     await WaitUntil(()=>_ENV.jsnotebook!=undefined,100,1000);
-    if(!_ENV.__priv_sourceProcessors.some((t1:any)=>t1.name==__name__)){
-        _ENV.__priv_sourceProcessors.unshift({
+    let codeContext=_ENV.__codeContext as LocalRunCodeContext;
+    if(!codeContext.sourceProcessors.some((t1:any)=>t1.name==__name__)){
+        codeContext.sourceProcessors.unshift({
             name:__name__,
-            process:(processContext:{source:string,_ENV:any,declVars:string[]})=>{
+            process:async (processContext:{source:string,_ENV:any,declVars:string[]})=>{
                 let compiledCode=ts.transpile(
                     processContext.source,
                     {target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022,esModuleInterop:false},
