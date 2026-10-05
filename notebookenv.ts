@@ -49,13 +49,29 @@ export async function initNotebookCodeEnv(_ENV?:any){
             }
         }
         _ENV.jsnotebook[__name__]=nbexp;
+        _ENV.jsnotebook.notebookViewer.openNotebookFileInWebui=(path:string)=>_ENV.jsnotebook.callMethodAttachedOnNotebookViewer('openNotebookFileInWebui',[path])
         nbexp.typeDecl.add({uid:__name__+'.ENV',decl:`
-declare function deleteVariables(name:string[]):void;
-import {Task} from 'partic2/jsutils1/base';
-
+declare let _ENV:any
+declare function deleteVariables(name: string[]): void;
+import { Task } from 'partic2/jsutils1/base';
+interface __type__ENV_jsnotebook_notebookViewer {
+    hasMethod(name: string): Promise<boolean>;
+    reconnectCodeContextSoon():Promise<void>;
+    openNotebookFileInWebui(path:string):Promise<void>
+}
+interface __type__ENV_jsnotebook {
+    callMethodAttachedOnNotebookViewer(name: string, argv?: any[], waitResult?: boolean): Promise<any>;
+    callFunctionInNotebookWebui(module:string,fnName:string,args:any[]):Promise<void>;
+    notebookViewer: __type__ENV_jsnotebook_notebookViewer;
+}
+declare let jsnotebook: __type__ENV_jsnotebook
 `})
     }
 }
+
+
+
+
 
 export async function getNotebookEnvAllTypeDecl(_ENV?:any):Promise<Array<{uid:string,decl:string}>>{
     if(_ENV==undefined){

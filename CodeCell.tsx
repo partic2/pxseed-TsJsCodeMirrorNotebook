@@ -371,7 +371,6 @@ export class CodeMirrorCellList extends DefaultCodeCellList{
     async newCell(afterCellKey?: string): Promise<string> {
         await this.initialized;
         return this._cellModifyMutex.exec(async ()=>{
-            this.notebookControl?.remoteDocUpdating
             let k=await super.newCell(afterCellKey);
             let list=this.getCellList();
             let found=list.findIndex(t1=>t1.key===k);
@@ -405,8 +404,8 @@ export class CodeMirrorCellList extends DefaultCodeCellList{
     }
     protected async attachCodeContext(codeContext: RunCodeContext) {
         await super.attachCodeContext(codeContext);
-        await codeContext.callFunction('callModuleFunction',['partic2/TsJsCodeMirrorNotebook/notebookenv','initNotebookCodeEnv',[]]);
         codeContext.event.addEventListener(path.join(__name__,'../notebookenv')+'.declChange',this.onTypescriptDeclChange);
+        await codeContext.callFunction('callModuleFunction',['partic2/TsJsCodeMirrorNotebook/notebookenv','initNotebookCodeEnv',[]]);
         this.setState({},()=>this.onTypescriptDeclChange());
     }
     protected async detachCodeContext(codeContext: RunCodeContext): Promise<void> {
@@ -481,6 +480,9 @@ export class CodeMirrorNotebook extends NotebookViewer{
     }
     async doLoad(): Promise<void> {
         await super.doLoad();
+    }
+    async openNotebookFileInWebui(path:string){
+        await openNewWindow(<CodeMirrorNotebook context={this.props.context} path={path} />,{title:path})
     }
     protected renderCodeCellList(): React.JSX.Element {
         return <CodeMirrorCellList codeContext={this.codeContext!} ref={this.rref.ccl} cellProps={{
