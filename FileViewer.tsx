@@ -3,18 +3,18 @@ import { RpcExtendClient1 } from 'pxprpc/extend'
 import { ReactRefEx } from 'partic2/pComponentUi/domui';
 import { SimpleFileSystem, TjsSfs } from 'partic2/CodeRunner/JsEnviron';
 import { utf8conv } from 'partic2/CodeRunner/jsutils2';
-import { future, requirejs } from 'partic2/jsutils1/base';
-import * as codemirror from 'codemirror';
-import * as cms from '@codemirror/state';
-import * as cmjs from '@codemirror/lang-javascript';
-import * as cmv from '@codemirror/view';
-import * as cmlsp from 'partic2/codemirror2026/lsp-client/index';
+import { future, requirejs, sleep } from 'partic2/jsutils1/base';
+
+
 import { NotebookViewer } from 'partic2/JsNotebook/notebook';
 import { CodeMirrorCellList } from './CodeCell';
 import { openNewWindow } from 'partic2/pComponentUi/workspace';
 import { tjsFrom } from 'partic2/tjshelper/tjsonjserpc';
-import { defaultFileSystem, defaultLspClient, serverSide } from './webuiutils';
 import { DynamicPageCSSManager } from 'partic2/jsutils1/webutils';
+import { defaultServerFileSystem, defaultTypescriptLanguageServiec } from './webuiutils';
+import { TypescriptCodemirrorEditor } from './cmts/preact';
+import type { TsServerNameDefinition, TsServerWorker } from './cmts/worker';
+import { rootWindowGroup } from 'partic2/pComponentUi/window';
 
 
 let __name__=requirejs.getLocalRequireModule(require);
@@ -28,126 +28,84 @@ DynamicPageCSSManager.PutCss(`.${css.codemirrorContainer} .cm-editor`,['height:1
 DynamicPageCSSManager.PutCss(`.${css.codemirrorContainer} .cm-scroller`,['overflow:auto']);
 
 export class TypeScriptCodeFileViewer extends React.Component<{
-    path:string,initialSelect?:{
-        anchor:number|{line:number,character:number},
-        focus:number|{line:number,character:number}
+    path:string,initialSelection?:{
+        anchor:number,
+        focus:number
     }}>{
+    path?:string;
+    initialSelection?:{anchor:number,focus:number}
+    tsserver?:TsServerWorker
+    protected initialized=new future<void>();
+    constructor(props:any,ctx:any){
+        super(props,ctx);
+        this.initialSelection=this.props.initialSelection;
+        this.path=this.props.path;
+        (async ()=>{
+            this.tsserver=await defaultTypescriptLanguageServiec.get();
+            this.initialized.setResult();
+            this.setState({});
+        })();
+    }
     rref={
-        codeMirrorDiv:new ReactRefEx<HTMLDivElement>()
+        editor:new ReactRefEx<TypescriptCodemirrorEditor>()
     }
     async reloadFile(){
-        let fs=await defaultFileSystem.get();
+        await this.initialized.get();
+        let fs=await defaultServerFileSystem.get();
         let bindata=await fs.readAll(this.props.path);
         if(bindata!=null){
             let content=utf8conv(bindata);
-            let cmev=await this.codemirrorEditorView.get();
-            cmev.dispatch({changes:{from:0,to:cmev.state.doc.length,insert:content}});
+            let cmev=await this.rref.editor.waitValid();
+            cmev.setCurrentDocumentText(content);
         }
     }
     async saveFile(){
-        let fs=await defaultFileSystem.get();
-        let cmev=await this.codemirrorEditorView.get();
-        let content=cmev.state.doc.toString();
+        let fs=await defaultServerFileSystem.get();
+        let cmev=await this.rref.editor.waitValid();
+        let content=cmev.getCurrentDocumentText();
         let bindata=utf8conv(content);
         await fs.writeAll(this.props.path,bindata);
     }
-    codemirrorEditorView=new future<cmv.EditorView>();
     async componentDidMount(){
-        let div1=await this.rref.codeMirrorDiv.waitValid();
-        let extensions=[
-            codemirror.basicSetup, cmjs.javascript({ typescript: true }), cms.Prec.high(cmv.keymap.of([
-        ]))]
-        
-        let lsp=await defaultLspClient.get();
-        let lspuri='file://'+this.props.path;
-        extensions.push(lsp.cmclient.plugin(lspuri, 'typescript'));
-        extensions.push(cmv.EditorView.domEventHandlers({
-            click:(event,eview)=>{
-                (async ()=>{
-                    const isCtrlPressed = event.ctrlKey || event.metaKey;
-                    if (isCtrlPressed && event.button === 0) {
-                        const pos = eview.posAtCoords({ x: event.clientX, y: event.clientY });
-                        if (pos === null) return;
-                        const line=eview.state.doc.lineAt(pos);
-                        const character=pos-line.from;
-                        let def1=await lsp.lspproxy.getDefinition({line:line.number-1,character,textDocument:{uri:lspuri}});
-                        for(let t1 of def1){
-                            //Typescript language server issue.
-                            t1.uri=decodeURIComponent(t1.uri);
-                        }
-                        let serverSideImpl=await serverSide.get();
-                        let summary=await serverSideImpl.getSummaryOfLocations(def1);
-                        openNewWindow(<div>{
-                            summary.map(t1=><a href="javascript:;" onClick={async ()=>{
-                                openNewWindow(<TypeScriptCodeFileViewer path={new URL(t1.location.uri).pathname}
-                                initialSelect={{
-                                    anchor:t1.location.range.start,
-                                    focus:t1.location.range.end
-                                }}
-                                />,{title:t1.location.uri.substring(t1.location.uri.lastIndexOf('/'))})
-                            }}>
-                                <div>{t1.location.uri}</div>
-                                <div>{t1.summary}</div>
-                            </a>)
-                        }</div>,{title:'definition'})
-                    }
-                })();
-            }
-        }));
-        let eview=new codemirror.EditorView({
-            state: cms.EditorState.create({
-                extensions,
-            }),
-            parent: div1,
-        });
-        this.codemirrorEditorView.setResult(eview);
-        
         await this.reloadFile();
-        if(this.props.initialSelect!=null){
-            if(typeof this.props.initialSelect.anchor!='number'){
-                let line = eview.state.doc.line(Math.max(1, Math.min(eview.state.doc.lines, this.props.initialSelect.anchor.line+1)));
-                this.props.initialSelect.anchor=line.from+this.props.initialSelect.anchor.character;
-            }
-            if(typeof this.props.initialSelect.focus!='number'){
-                let line = eview.state.doc.line(Math.max(1, Math.min(eview.state.doc.lines, this.props.initialSelect.focus.line+1)));
-                this.props.initialSelect.focus=line.from+this.props.initialSelect.focus.character;
-            }
-            eview.dispatch({
-                selection: { anchor: this.props.initialSelect.anchor,head:this.props.initialSelect.focus },
-                effects: cmv.EditorView.scrollIntoView(this.props.initialSelect.focus, { y: 'center' }) // 'center' let the selected line be centered
-            });
+        if(this.initialSelection!=null){
+            (async ()=>{
+                await sleep(300);
+                (await this.rref.editor.waitValid()).select({anchor:this.initialSelection!.anchor,focus:this.initialSelection!.focus,scrollTo:true});
+            })();
         }
     }
+    async gotoDefinitionOpenView(def: TsServerNameDefinition){
+        let fileName=def.uri.substring(def.uri.lastIndexOf('/'));
+        let newWindow=await openNewWindow(<TypeScriptCodeFileViewer path={def.uri.substring('file://'.length)} initialSelection={{anchor:def.span[0],focus:def.span[1]}} />,
+            {title:fileName});
+        let size=rootWindowGroup.get()!.getSize();
+        if(size.width>500){
+            size.width=size.width*0.8;
+        }
+        if(size.height>400){
+            size.height=size.height*0.8;
+        }
+        (await newWindow.windowRef.waitValid()).layout({width:size.width,height:size.height})
+    }
     render(): React.ComponentChildren {
-        return <div style={{display:'flex',flexDirection:'column',height:'100%'}}>
-            <div style={{display:'flex',flexDirection:'row',flex:0}}>
+        if(this.initialized.done){
+            return <div style={{display:'flex',flexDirection:'column',height:'100%',minHeight:'400px',minWidth:'300px',overflow:'hidden',flexGrow:'1',flexShrink:'1',position:'relative'}}>
+               <div style={{display:'flex',flexDirection:'row',justifyContent:'space-evenly'}}>
                 <a href="javascript:;" onClick={()=>this.saveFile()}>Save</a>
-                <span style={{padding:'0 10px'}}></span>
                 <a href="javascript:;" onClick={()=>this.reloadFile()}>Reload</a>
+               </div>
+               <div style={{flexGrow:'1',position:'relative'}}>
+                <TypescriptCodemirrorEditor ref={this.rref.editor} tsserver={this.tsserver} fileUri={'file://'+this.path} 
+                    layoutHeight={'fill parent'}
+                    onGotoDefinitionOpenView={(def)=>{this.gotoDefinitionOpenView(def)}}/>
+               </div>
             </div>
-            <div ref={this.rref.codeMirrorDiv} class={css.codemirrorContainer} style={{flex:1,minHeight:'300px'}}></div>
-        </div>
-    }
-}
-
-
-export class CodeMirrorNotebook extends NotebookViewer{
-    async useRpc(rpc?: { name: string | null; }): Promise<void> {
-        await super.useRpc(rpc);
-    }
-    async doLoad(): Promise<void> {
-        await super.doLoad();
-    }
-    protected renderCodeCellList(): React.JSX.Element {
-        return <CodeMirrorCellList codeContext={this.codeContext!} ref={this.rref.ccl} cellProps={{
-            onInputChange:(target)=>this.onCellInputChange(target)
-        }}/>
-    }
-    async openTypescriptCodeFileViewer(path:string,opt?:{initialSelect?:{anchor:number,focus:number}}){
-        let rpc=(await this.props.context.rpc.ensureConnected())!;
-        let fs=new TjsSfs().from(await tjsFrom(rpc));
+        }else{
+            return <div>Initializing...</div>
+        }
         
-        await openNewWindow(<TypeScriptCodeFileViewer path={path} {...opt}/>)
     }
 }
+
 

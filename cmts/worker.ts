@@ -2,10 +2,12 @@
 
 import { RpcSerializeMagicMark } from "partic2/pxprpcClient/pxseedremotefuncs";
 import ts from 'typescript'
-import { type Diagnostic, type LintSource } from "@codemirror/lint";
-import { GetCurrentTime, logger, requirejs } from "partic2/jsutils1/base";
-import { getWWWRoot,path } from "partic2/jsutils1/webutils";
+import { type Diagnostic, type LintSource } from "partic2/codemirror2026/prebuilt/@codemirror-lint";
+import { assert, GetCurrentTime, logger, requirejs } from "partic2/jsutils1/base";
+import { getWWWRoot, path } from "partic2/jsutils1/webutils";
 import { getSimpleFileSysteNormalizedWWWRoot } from "partic2/CodeRunner/JsEnviron";
+import { buildTjs } from "partic2/tjshelper/tjsbuilder";
+import { utf8conv } from "partic2/CodeRunner/jsutils2";
 
 let __name__ = requirejs.getLocalRequireModule(require);
 let log = logger.getLogger(__name__);
@@ -124,52 +126,43 @@ function ensureAnchor(expr: RegExp, start: boolean) {
         expr.flags ?? (expr.ignoreCase ? "i" : ""),
     );
 }
-function matchBefore(code: string, pos: number, expr: RegExp) {
-    const line = getLineAtPosition(code, pos);
-    const start = Math.max(line.from, pos - 250);
-    const str = line.text.slice(start - line.from, pos - line.from);
-    const found = str.search(ensureAnchor(expr, false));
-    return found < 0
-        ? null
-        : { from: start + found, to: pos, text: str.slice(found) };
-}
 
 
 class NodeLanguageServerEnvironment {
     [RpcSerializeMagicMark] = {}
-    lsHost?:ts.LanguageServiceHost
-    languageService?:ts.LanguageService
-    openedScripts=new Map<string,{version:string,snapshot?:ts.IScriptSnapshot}>();
-    compileSetting:ts.CompilerOptions={
+    lsHost?: ts.LanguageServiceHost
+    languageService?: ts.LanguageService
+    openedScripts = new Map<string, { version: string, snapshot?: ts.IScriptSnapshot }>();
+    compileSetting: ts.CompilerOptions = {
         target: ts.ScriptTarget.ESNext,
         module: ts.ModuleKind.CommonJS,
         lib: ["lib.dom.d.ts", "lib.es2021.d.ts"],
-        jsx:ts.JsxEmit.React,
-        paths:{},
+        jsx: ts.JsxEmit.React,
+        paths: {},
     }
-    projectVersion=0;
-    constructor(public sys:ts.System) {}
-    async initialize(){
-        let fs=await import('fs');
-        if(this.compileSetting.baseUrl==undefined){
-            this.compileSetting.baseUrl=path.join(getSimpleFileSysteNormalizedWWWRoot(),'..','source');
+    projectVersion = 0;
+    pxseedLibBaseDir = '';
+    constructor(public sys: ts.System) { }
+    async initialize() {
+        let fs = await import('fs');
+        this.pxseedLibBaseDir = path.join(getSimpleFileSysteNormalizedWWWRoot(), '..', 'source')
+        if (this.compileSetting.paths!['*'] == undefined) {
+            this.compileSetting.paths!['*'] = [this.pxseedLibBaseDir + '/*'];
         }
-        //For TS>=6.0
-        //this.compileSetting.paths!['*']=[this.compileSetting.baseUrl+'/*'];
         this.lsHost = {
-            getProjectVersion:()=>String(this.projectVersion),
+            getProjectVersion: () => String(this.projectVersion),
             getScriptFileNames: () => Array.from(this.openedScripts.keys()),
             getScriptVersion: (fileName) => {
-                let t1=this.openedScripts.get(fileName);
-                if(t1==undefined){
+                let t1 = this.openedScripts.get(fileName);
+                if (t1 == undefined) {
                     return '1';
-                }else{
+                } else {
                     return t1.version;
                 }
             },
             getScriptSnapshot: (fileName) => {
-                let s=this.openedScripts.get(fileName);
-                if(s!=undefined){
+                let s = this.openedScripts.get(fileName);
+                if (s != undefined) {
                     return s.snapshot
                 }
                 if (!fs.existsSync(fileName)) return undefined;
@@ -178,8 +171,8 @@ class NodeLanguageServerEnvironment {
             getCurrentDirectory: () => process.cwd(),
             getCompilationSettings: () => this.compileSetting,
             getDefaultLibFileName: (options) => ts.getDefaultLibFilePath(options),
-            fileExists: (path)=>{
-                if(this.openedScripts.has(path)){
+            fileExists: (path) => {
+                if (this.openedScripts.has(path)) {
                     return true;
                 }
                 return this.sys.fileExists(path);
@@ -187,20 +180,19 @@ class NodeLanguageServerEnvironment {
             readFile: this.sys.readFile,
             readDirectory: this.sys.readDirectory,
         };
-        this.languageService=await this.decorateLanguageService(ts.createLanguageService(this.lsHost));
+        this.languageService = await this.decorateLanguageService(ts.createLanguageService(this.lsHost));
         return this;
     }
-    async decorateLanguageService(ls:ts.LanguageService){
-        let fs=await import('fs');
-        let path=await import('path');
+    async decorateLanguageService(ls: ts.LanguageService) {
+        let fs = await import('fs');
+        let path = await import('path');
 
         let decoratedLS = Object.create(ls);
+        let pxseedLibBaseDir = this.pxseedLibBaseDir
 
         function getImportStringContext(
-            fileName: string,
-            position: number,
-            ls: ts.LanguageService
-        ): { partialPath: string } | null {
+            fileName: string, position: number, ls: ts.LanguageService
+        ) {
             const program = ls.getProgram();
             if (!program) return null;
             const sourceFile = program.getSourceFile(fileName);
@@ -228,24 +220,20 @@ class NodeLanguageServerEnvironment {
             const text = node.text;
             const partialPath = text.slice(0, position - node.getStart() - 1);
 
-            return { partialPath };
+            return { nodeStart: node.getStart(), partialPath };
         }
 
         function getDirectoryCompletions(
-            baseUrl: string,
             partialPath: string
-        ): ts.CompletionEntry[] {
-            const targetDir = path.join(baseUrl, partialPath);
+        ) {
             const entries: ts.CompletionEntry[] = [];
 
-            const dirToList = partialPath.endsWith('/')
-                ? targetDir
-                : path.dirname(targetDir);
-
+            let dirToList = partialPath.length == 0
+                ? pxseedLibBaseDir
+                : path.dirname(path.join(pxseedLibBaseDir, partialPath.endsWith('/') ? partialPath + '_' : partialPath))
             if (!fs.existsSync(dirToList) || !fs.statSync(dirToList).isDirectory()) {
-                return entries;
+                return { entries, dirToList };
             }
-
             const files = fs.readdirSync(dirToList, { withFileTypes: true });
             for (const file of files) {
                 if (!file.isDirectory()) continue;
@@ -262,39 +250,33 @@ class NodeLanguageServerEnvironment {
                     sortText: file.name,
                 });
             }
-
-            return entries;
+            return { entries, dirToList };
         }
-        let baseUrl=this.compileSetting.baseUrl!;
+
 
         decoratedLS.getCompletionsAtPosition = (
-                fileName: string,
-                position: number,
-                options: ts.GetCompletionsAtPositionOptions | undefined
+            fileName: string,
+            position: number,
+            options: ts.GetCompletionsAtPositionOptions | undefined
         ): ts.CompletionInfo | undefined => {
-            const originalResult = ls.getCompletionsAtPosition.call(decoratedLS,fileName, position, options);
+            const originalResult = ls.getCompletionsAtPosition.call(decoratedLS, fileName, position, options);
+            if (!originalResult) {
+                return originalResult;
+            }
             const context = getImportStringContext(fileName, position, ls);
             if (!context) {
                 return originalResult;
             }
-            const directoryEntries = getDirectoryCompletions(
-                baseUrl,
+            let directoryCompletions = getDirectoryCompletions(
                 context.partialPath
             );
-
-            if (!originalResult) {
-                return {
-                    isGlobalCompletion: false,
-                    isMemberCompletion: false,
-                    isNewIdentifierLocation: true,
-                    entries: directoryEntries,
-                };
+            if (originalResult.optionalReplacementSpan == undefined) {
+                originalResult.optionalReplacementSpan = { start: context.nodeStart + directoryCompletions.dirToList.length - pxseedLibBaseDir.length + 1, length: position }
             }
-
             const mergedEntries = [
-                ...directoryEntries.map(e => ({
+                ...directoryCompletions.entries.map(e => ({
                     ...e,
-                    sortText: '0' + e.name, 
+                    sortText: '0' + e.name,
                 })),
                 ...originalResult.entries,
             ];
@@ -307,68 +289,95 @@ class NodeLanguageServerEnvironment {
         return decoratedLS as ts.LanguageService
     }
     getSourceFile(fileName: string): ts.SourceFile | undefined {
-        let r=this.languageService?.getProgram()?.getSourceFile(fileName)
+        let r = this.languageService?.getProgram()?.getSourceFile(fileName)
         return r;
     }
-    updateFile(fileName: string, content: string ,range?:[number,number]) {
+    updateFile(fileName: string, content: string, range?: [number, number]) {
         this.projectVersion++;
-        let f=this.openedScripts.get(fileName);
-        if(f==undefined){
-            let t1=ts.ScriptSnapshot.fromString(content);
-            this.openedScripts.set(fileName,{version:String(GetCurrentTime().getTime()),snapshot:t1});
-        }else if(range==undefined){
-            let t1=ts.ScriptSnapshot.fromString(content);
-            f.snapshot=t1;
-            f.version=String(GetCurrentTime().getTime())
-        }else{
-            let text=f.snapshot!.getText(0,f.snapshot!.getLength());
-            text=text.substring(0,range[0])+content+text.substring(range[1])
-            f.snapshot=ts.ScriptSnapshot.fromString(text);
-            f.version=String(GetCurrentTime().getTime())
+        let f = this.openedScripts.get(fileName);
+        if (f == undefined) {
+            let t1 = ts.ScriptSnapshot.fromString(content);
+            this.openedScripts.set(fileName, { version: String(GetCurrentTime().getTime()), snapshot: t1 });
+        } else if (range == undefined) {
+            let t1 = ts.ScriptSnapshot.fromString(content);
+            f.snapshot = t1;
+            f.version = String(GetCurrentTime().getTime())
+        } else {
+            let text = f.snapshot!.getText(0, f.snapshot!.getLength());
+            text = text.substring(0, range[0]) + content + text.substring(range[1])
+            f.snapshot = ts.ScriptSnapshot.fromString(text);
+            f.version = String(GetCurrentTime().getTime())
         }
     }
     deleteFile(fileName: string) {
-        if(this.openedScripts.has(fileName)){
+        if (this.openedScripts.has(fileName)) {
             this.openedScripts.delete(fileName);
         }
         this.sys.deleteFile?.(fileName);
     }
 }
 
+export interface TsServerNameDefinition {
+    uri: string,
+    name: string,
+    span: [number, number],
+    summary: string
+}
+
 export class TsServerWorker {
     [RpcSerializeMagicMark] = {};
     initialized = false;
     env?: NodeLanguageServerEnvironment;
-    constructor(env:NodeLanguageServerEnvironment){
-        this.env=env;
+    constructor(env: NodeLanguageServerEnvironment) {
+        this.env = env;
     }
-    async initialize(){
+    async initialize() {
         await this.env!.initialize();
+        this.initialized = true;
         return this;
     }
-    async updateFile({ path, code , range}: { path: string; code: string ,range?:[number,number]}) {
+    protected convertUriToPath(uri: string) {
+        assert(uri.startsWith('file:///'));
+        if (!getWWWRoot().startsWith('/')) {
+            //on Windows?
+            uri = uri.substring(8);
+        } else {
+            uri = uri.substring(7);
+        }
+        return uri;
+    }
+    protected convertPathBacktoUri(path: string) {
+        if (!path.startsWith('/')) {
+            path = '/' + path;
+            path = path.replace(/\\/g, '/');
+        }
+        return 'file://' + path;
+    }
+    async updateFile({ uri, code, range }: { uri: string; code: string, range?: [number, number] }) {
+        let path = this.convertUriToPath(uri);
         let env = this.env;
         if (!env) return;
         const existing = env.getSourceFile(path);
 
         if (existing) {
             if (code === existing.getFullText()) return false;
-            env.updateFile(path, code);
+            env.updateFile(path, code, range);
             // This should make initial linting etc faster by making
             // TypeScript eagerly create the source file object
             env.getSourceFile(path);
             return true;
         }
 
-        env.updateFile(path, code,range);
+        env.updateFile(path, code, range);
         env.getSourceFile(path);
         return true;
     }
     async getLints({
-        path,
+        uri, range
     }: {
-        path: string;
+        uri: string; range?: [number, number]
     }) {
+        let path = this.convertUriToPath(uri);
         let env = this.env;
         if (!env) return [];
         // Don't crash if the relevant file isn't created yet.
@@ -378,25 +387,24 @@ export class TsServerWorker {
         const syntaticDiagnostics = env.languageService!.getSyntacticDiagnostics(path);
         const semanticDiagnostics = env.languageService!.getSemanticDiagnostics(path);
 
-        const diagnostics = [...syntaticDiagnostics, ...semanticDiagnostics].filter(
+        let diagnostics = [...syntaticDiagnostics, ...semanticDiagnostics].filter(
             (diagnostic): diagnostic is ts.DiagnosticWithLocation =>
                 isDiagnosticWithLocation(diagnostic),
         );
+        if (range != undefined) {
+            diagnostics = diagnostics.filter(t1 => t1.start >= range[0] && t1.start <= range[1]);
+        }
 
         return diagnostics.map(convertTSDiagnosticToCM);
     }
-    async getAutocompletion({path,pos,explicit}: { path: string; pos:number, explicit:boolean}) {
+    async getAutocompletion({ uri, pos, explicit }: { uri: string; pos: number, explicit: boolean }) {
+        let path = this.convertUriToPath(uri);
         let env = this.env;
         if (!env) return null;
         const rawContents = env.getSourceFile(path)?.getFullText();
         if (!rawContents) return null;
-        let word = matchBefore(rawContents, pos, /\w*/);
-        if (!word?.text) {
-            word = matchBefore(rawContents, pos, /\./);
-        }
-        if (!word?.text && !explicit) return null;
         const completionInfo = env.languageService!.getCompletionsAtPosition(
-            path,pos,
+            path, pos,
             {
                 includeCompletionsForModuleExports: true,
                 includeCompletionsForImportStatements: true,
@@ -404,10 +412,11 @@ export class TsServerWorker {
             {},
         );
         if (!completionInfo) return null;
-        let entries=completionInfo.entries.map(t1=>({label:t1.name,kind:t1.kind,details:t1.labelDetails?.detail,description:t1.labelDetails?.description}))
-        return {from:completionInfo.optionalReplacementSpan?.start??pos,entries,identity:{[RpcSerializeMagicMark]:completionInfo}};
+        let entries = completionInfo.entries.map(t1 => ({ label: t1.name, kind: t1.kind, details: t1.labelDetails?.detail, description: t1.labelDetails?.description }))
+        return { from: completionInfo.optionalReplacementSpan?.start ?? pos, entries };
     }
-    async getHover({ path, pos }: { path: string; pos: number }) {
+    async getHover({ uri, pos }: { uri: string; pos: number }) {
+        let path = this.convertUriToPath(uri);
         let env = this.env;
         if (!env) return null;
         const sourcePos = pos;
@@ -441,11 +450,36 @@ export class TsServerWorker {
             return null;
         }
     }
+    async getDefinition({ uri, pos }: { uri: string, pos: number }): Promise<TsServerNameDefinition[] | null> {
+        let path = this.convertUriToPath(uri);
+        let env = this.env;
+        if (!env) return null;
+        let defs = env.languageService!.getDefinitionAtPosition(path, pos);
+        if (defs == undefined) return null;
+        let result = new Array<TsServerNameDefinition>();
+        let tjs = await buildTjs();
+        for (let t1 of defs) {
+            let fileContent = utf8conv(await tjs.readFile(t1.fileName));
+            let start=fileContent.lastIndexOf('\n',t1.textSpan.start);
+            start=start<0?0:start;
+            let end=fileContent.indexOf('\n',t1.textSpan.start+t1.textSpan.length);
+            end=end<0?fileContent.length:end;
+            result.push({
+                uri: this.convertPathBacktoUri(t1.fileName),
+                span: [t1.textSpan.start, t1.textSpan.start + t1.textSpan.length],
+                name: t1.name,
+                summary:fileContent.substring(start,end).trim()
+            })
+        }
+        return result;
+    }
     async getEnv() {
         return this.env;
     }
 }
 
-export async function createTsServerWorker(){
-    return new TsServerWorker(new NodeLanguageServerEnvironment(ts.sys)).initialize()
+export let lastCreateTsServerWorker: TsServerWorker | null = null;
+export async function createTsServerWorker() {
+    lastCreateTsServerWorker = await new TsServerWorker(new NodeLanguageServerEnvironment(ts.sys)).initialize();
+    return lastCreateTsServerWorker;
 }

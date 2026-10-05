@@ -5,12 +5,15 @@ import { LanguageServerConnection } from 'partic2/typescriptLanguageServer2026/p
 import { Transport } from 'partic2/codemirror2026/lsp-client/index';
 import { ReactRefEx } from 'partic2/pComponentUi/domui';
 import * as cmlsp from 'partic2/codemirror2026/lsp-client/index'
-import { GenerateRandomString, Task, throwIfAbortError } from 'partic2/jsutils1/base';
+import { GenerateRandomString, requirejs, Task, throwIfAbortError } from 'partic2/jsutils1/base';
 import { TjsSfs } from 'partic2/CodeRunner/JsEnviron';
 import { tjsFrom } from 'partic2/tjshelper/tjsonjserpc';
 import * as React from 'preact'
+import { RpcExtendClient1 } from 'pxprpc/extend';
+import { Client } from 'pxprpc/base';
+import { buildTjs } from '../tjshelper/tjsbuilder';
 
-
+let __name__=requirejs.getLocalRequireModule(require);
 
 export class SimpleLogViewer extends React.Component<
     {logSource:EventBuffer<{level:'info'|'warning',summary:string,detail:string}>},
@@ -61,54 +64,27 @@ export class SimpleLogViewer extends React.Component<
     }
 }
 
-class CmLspTransport<T extends LanguageServerConnection> implements Transport {
-    constructor(public lspconn: T) {}
-    async send(message: string) {
-        let request=JSON.parse(message);
-        await this.lspconn.send(request);
-    }
-    cb: ((value: string) => void) | null = null;
-    protected async __poll() {
-        if (this.cb == null) return;
-        let cb = this.cb;
-        while (this.cb == cb) {
-            let msg = await this.lspconn.receive();
-            let summary='undefined'
-            if('method' in msg){
-                summary=msg.method;
-            }
-            try{cb(JSON.stringify(msg));}catch(err:any){
-                throwIfAbortError(err);
-            }
-        }
-    }
-    subscribe(handler: (value: string) => void): void {
-        this.cb = handler;
-        this.__poll();
-    }
-    unsubscribe(handler: (value: string) => void): void {
-        this.cb = null;
-    }
+async function TypescriptServerWorkerFactory(){
+    return new RpcExtendClient1(new Client(
+        (await openConnectionFromUrl(
+            `iooverpxprpc:server host/${encodeURIComponent('webworker:'+__name__+'.TypescriptServerWorker')}`)
+        )!)).init();
 }
 
-
-export let defaultLspClient=new Singleton(async ()=>{
-    let serverSide1=await serverSide.get();
-    serverSide1.preparePxseedNotebookLspEnviron();
-    let lspproxy=await serverSide1.getTypescriptProxyLsp()
-    let lsptransport=new CmLspTransport(lspproxy);
-    let cmclient = new cmlsp.LSPClient({ extensions: cmlsp.languageServerExtensions() }).connect(lsptransport);
-    await cmclient.initializing;
-    return {lsptransport,cmclient,lspproxy};
+export let TypescriptServerWorker=new Singleton(TypescriptServerWorkerFactory)
+export let defaultTypescriptLanguageServiec=new Singleton(async ()=>{
+    let t=await importRemoteModule(TypescriptServerWorker,'partic2/TsJsCodeMirrorNotebook/cmts/worker') as typeof import('partic2/TsJsCodeMirrorNotebook/cmts/worker')
+    return await t.createTsServerWorker()
+})
+export let serverSide=new Singleton(async ()=>{
+    let t=await importRemoteModule(ServerHostWorker1Rpc,'partic2/TsJsCodeMirrorNotebook/serverSide') as typeof import('partic2/TsJsCodeMirrorNotebook/serverSide')
+    await t.preparePxseedNotebookLspEnviron();
+    return t
 })
 
-export let serverSide=new Singleton(async ()=>{
-    let rpc1=await (await getPersistentRegistered(ServerHostWorker1RpcName))!.ensureConnected();
-    return await importRemoteModule(rpc1,'partic2/TsJsCodeMirrorNotebook/serverSide') as typeof import('partic2/TsJsCodeMirrorNotebook/serverSide');
-});
-
-export let defaultFileSystem=new Singleton(async ()=>{
-    let t1=new TjsSfs().from(await tjsFrom(await ServerHostWorker1Rpc.get()))
-    await t1.ensureInited();
-    return t1;
+export let defaultServerFileSystem=new Singleton(async ()=>{
+    let tjs=await buildTjs();
+    let fs=new TjsSfs().from(tjs);
+    fs.ensureInited();
+    return fs;
 })

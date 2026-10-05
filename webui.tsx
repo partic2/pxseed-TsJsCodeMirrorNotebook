@@ -9,9 +9,8 @@ import { TaskLocalEnv } from 'partic2/CodeRunner/CodeContext';
 import {ServerHostWorker1Rpc} from 'partic2/pxprpcClient/registry'
 import { NotebookViewer } from 'partic2/JsNotebook/notebook';
 import { Singleton } from 'partic2/CodeRunner/jsutils2';
-import { CodeMirrorNotebook, TypeScriptCodeFileViewer } from './FileViewer';
 import { getSimpleFileSysteNormalizedWWWRoot, TjsSfs } from 'partic2/CodeRunner/JsEnviron';
-import { defaultLspClient, SimpleLogViewer } from './webuiutils';
+import { CodeMirrorNotebook } from './CodeCell';
 
 
 const __name__=requirejs.getLocalRequireModule(require);
@@ -40,8 +39,6 @@ export async function main(args:string){
         openNewWindow(<NotebookViewerContainer context={
             {rpc:(await getPersistentRegistered(ServerHostWorker1RpcName))!}} path={notebookFilePath} />,
             {title:'TS/JS Notebook',layoutHint:__name__+'TS/JS Notebook entry'});
-        let {lspproxy}=await defaultLspClient.get();
-        openNewWindow(<SimpleLogViewer logSource={await lspproxy.getLogger()}/>,{title:'log'})
     }
 }
 
