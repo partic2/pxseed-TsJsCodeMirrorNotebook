@@ -19,21 +19,7 @@ let __name__=requirejs.getLocalRequireModule(require);
 let log=logger.getLogger(__name__);
 
 
-/**
- * Shared method between the default tooltipRenderer
- * and default autocompleteRenderer. This renders TypeScript's
- * SymbolDisplayPart into HTML. You will probably swap this out with a
- * renderer of your own.
- */
-const renderDisplayParts = (displayParts: ts.SymbolDisplayPart[]) => {
-  const div = document.createElement("div");
-  for (const part of displayParts) {
-    const span = div.appendChild(document.createElement("span"));
-    span.className = `quick-info-${part.kind}`;
-    span.innerText = part.text;
-  }
-  return div;
-};
+
 interface HoverInfo {
   start: number;
   end: number;
@@ -41,7 +27,7 @@ interface HoverInfo {
   typeDef: readonly ts.DefinitionInfo[] | undefined;
   /** Definitions returned by ts.LanguageService.getDefinitionAtPosition() */
   def: readonly ts.DefinitionInfo[] | undefined;
-  quickInfo: ts.QuickInfo | undefined;
+  quickInfo: string | undefined;
 }
 
 export class TypescriptCodemirrorEditor<P={}> extends CodeMirrorEditor<P&{
@@ -202,8 +188,8 @@ export class TypescriptCodemirrorEditor<P={}> extends CodeMirrorEditor<P&{
     }
     tooltipRender(info: HoverInfo) {
         const div = document.createElement("div");
-        if (info.quickInfo?.displayParts) {
-            div.appendChild(renderDisplayParts(info.quickInfo.displayParts));
+        if (info.quickInfo) {
+            div.innerHTML=info.quickInfo
         }
         return { dom: div };
     };

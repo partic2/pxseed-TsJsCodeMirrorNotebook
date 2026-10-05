@@ -48,6 +48,7 @@ interface CodeCellStats{
     resultVariable:string|null,
     focusin:boolean,
     errorCatched:string|null,
+    runCodeKey?:'Ctl+Ent'|'Enter'
 }
 
 
@@ -273,13 +274,29 @@ export class CodeMirrorCodeCell extends React.Component<CodeCellProps,CodeCellSt
         let {module,functionName,argv}=ev.data;
         (await import(module))[functionName](...argv,{codeCell:this,codeContext:this.codeContext})
     }
-    protected beforeRender(){
+    protected async checkState(){
         if(this.codeContext!=this.props.codeContext){
             if(this.codeContext!=undefined){
                 this.codeContext.event.removeEventListener(`${__name__}.CodeCell.callWebuiFunction`,this.codeContextCallMethodEvent);
             }
             this.codeContext=this.props.codeContext;
             this.codeContext.event.addEventListener(`${__name__}.CodeCell.callWebuiFunction`,this.codeContextCallMethodEvent);
+        }
+        if(this.state.runCodeKey!=this.getRunCodeKey()){
+            let current=this.state.runCodeKey;
+            this.setState({runCodeKey:this.getRunCodeKey()});
+            let codemirrorKeybindingMap={
+                'Ctl+Ent':'Ctrl-Enter',
+                'Enter':'Enter'
+            }
+            let editor=await this.rref.codemirrorInputEditor.waitValid();
+            if(current!=undefined){
+                editor.removeKeyBinding(codemirrorKeybindingMap[current]);
+            }
+            editor.addKeybinding({
+                key:codemirrorKeybindingMap[this.getRunCodeKey()],
+                run:(t)=>{this.runCode();return true}
+            });
         }
     }
     renderCellInput(){
@@ -298,7 +315,7 @@ export class CodeMirrorCodeCell extends React.Component<CodeCellProps,CodeCellSt
         ]
     }
     render(props?: Readonly<React.Attributes & { children?: React.ComponentChildren; ref?: React.Ref<any> | undefined; }> | undefined, state?: Readonly<{}> | undefined, context?: any): React.ComponentChild {
-        this.beforeRender();
+        this.checkState();
         return <div style={{display:'flex',flexDirection:'column',position:'relative',...this.props.divStyle}} ref={this.rref.container} 
                 {...this.props.divAttr}
                 onFocusIn={(ev)=>{
@@ -336,7 +353,7 @@ export class CodeMirrorCodeCell extends React.Component<CodeCellProps,CodeCellSt
 
 export class CodeMirrorCellList extends DefaultCodeCellList{
     protected remoteNotebookFile=new future<{id:string,uri:string}>();
-    protected headCell=new Ref2<string>('')
+    protected headCell=new Ref2<string>('');
     protected notebookControl?:TypescriptNotebookControl;
     protected initialized:Promise<void>
     constructor(props:any,ctx:any){

@@ -88,14 +88,22 @@ export class TypeScriptCodeFileViewer extends React.Component<{
         }
         (await newWindow.windowRef.waitValid()).layout({width:size.width,height:size.height})
     }
+    protected async onKeyDown(ev: React.TargetedKeyboardEvent<HTMLDivElement>){
+        if(ev.key=='s' && ev.ctrlKey){
+            await this.saveFile();
+        }
+    }
     render(): React.ComponentChildren {
         if(this.initialized.done){
-            return <div style={{display:'flex',flexDirection:'column',height:'100%',minHeight:'400px',minWidth:'300px',overflow:'hidden',flexGrow:'1',flexShrink:'1',position:'relative'}}>
+            return <div style={{
+                    display:'flex',flexDirection:'column',height:'100%',minHeight:'400px',minWidth:'300px',overflow:'hidden',
+                    flexGrow:'1',flexShrink:'1'
+                }} onKeyDown={(ev)=>this.onKeyDown(ev)}>
                <div style={{display:'flex',flexDirection:'row',justifyContent:'space-evenly'}}>
-                <a href="javascript:;" onClick={()=>this.saveFile()}>Save</a>
+                <a href="javascript:;" onClick={()=>this.saveFile()}>Save(Ctrl+S)</a>
                 <a href="javascript:;" onClick={()=>this.reloadFile()}>Reload</a>
                </div>
-               <div style={{flexGrow:'1',position:'relative'}}>
+               <div style={{flexGrow:'1'}}>
                 <TypescriptCodemirrorEditor ref={this.rref.editor} tsserver={this.tsserver} fileUri={'file://'+this.path} 
                     layoutHeight={'fill parent'}
                     onGotoDefinitionOpenView={(def)=>{this.gotoDefinitionOpenView(def)}}/>

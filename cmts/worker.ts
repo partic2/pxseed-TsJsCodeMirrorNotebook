@@ -135,7 +135,7 @@ class NodeLanguageServerEnvironment {
     openedScripts = new Map<string, { version: string, snapshot?: ts.IScriptSnapshot }>();
     compileSetting: ts.CompilerOptions = {
         target: ts.ScriptTarget.ESNext,
-        module: ts.ModuleKind.CommonJS,
+        module: ts.ModuleKind.ESNext,
         lib: ["lib.dom.d.ts", "lib.es2021.d.ts"],
         jsx: ts.JsxEmit.React,
         paths: {},
@@ -416,39 +416,158 @@ export class TsServerWorker {
         return { from: completionInfo.optionalReplacementSpan?.start ?? pos, entries };
     }
     async getHover({ uri, pos }: { uri: string; pos: number }) {
-        let path = this.convertUriToPath(uri);
-        let env = this.env;
+        const path = this.convertUriToPath(uri);
+        const env = this.env;
         if (!env) return null;
         const sourcePos = pos;
 
         try {
-            const quickInfo = env.languageService!.getQuickInfoAtPosition(
-                path,
-                sourcePos,
-            );
+            const ls = env.languageService!;
+
+            const quickInfo = ls.getQuickInfoAtPosition(path, sourcePos);
             if (!quickInfo) {
                 return null;
             }
 
             const start = quickInfo.textSpan.start;
 
-            const typeDef =
-                env.languageService!.getTypeDefinitionAtPosition(path, sourcePos);
-            const def =
-                env.languageService!.getDefinitionAtPosition(path, sourcePos);
+            const typeDef = ls.getTypeDefinitionAtPosition(path, sourcePos);
+            const def = ls.getDefinitionAtPosition(path, sourcePos);
+
+            const html = this.renderQuickInfoHtml(quickInfo);
 
             return {
                 start,
                 end: start + quickInfo.textSpan.length,
                 typeDef,
                 def,
-                quickInfo,
+                quickInfo: html,
             };
         } catch (e) {
             // biome-ignore lint/suspicious/noConsole: we want to tell users about this
             log.error(e);
             return null;
         }
+    }
+    protected escapeHtml(s: string): string {
+        return s
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+    protected partsToText(parts: ts.SymbolDisplayPart[] | undefined): string {
+        if (!parts) return '';
+        return parts.map((p) => p.text).join('');
+    }
+    protected getSignaturesFromSymbol(
+        path: string,
+        pos: number,
+    ): { signature: string; documentation: string }[] {
+        const ls = this.env?.languageService;
+        const program = ls?.getProgram();
+        if (!ls || !program) return [];
+
+        try {
+            const sourceFile = program.getSourceFile(path);
+            if (!sourceFile) return [];
+
+            const checker = program.getTypeChecker();
+            const node = this.findNodeAtPosition(sourceFile, pos);
+            if (!node) return [];
+
+            let target: ts.Node | undefined = node;
+            if (ts.isCallExpression(node)) target = node.expression;
+            else if (ts.isIdentifier(node)) target = node;
+            else if (node.parent && ts.isCallExpression(node.parent))
+                target = node.parent.expression;
+
+            if (!target) return [];
+
+            const symbol = checker.getSymbolAtLocation(target);
+            if (!symbol) return [];
+
+            const type = checker.getTypeOfSymbolAtLocation(symbol, target);
+            const signatures = type.getCallSignatures();
+            if (signatures.length === 0) return [];
+
+            return signatures.map((sig) => {
+                const sigText = checker.signatureToString(
+                    sig,
+                    target,
+                    ts.TypeFormatFlags.NoTruncation |
+                        ts.TypeFormatFlags.WriteArrowStyleSignature,
+                );
+                const docs = sig.getDocumentationComment(checker);
+                const docText = ts.displayPartsToString(docs);
+                return { signature: sigText, documentation: docText };
+            });
+        } catch (e) {
+            log.error(e);
+            return [];
+        }
+    }
+    protected findNodeAtPosition(
+        sourceFile: ts.SourceFile,
+        pos: number,
+    ): ts.Node | undefined {
+        function find(node: ts.Node): ts.Node | undefined {
+            if (pos < node.getFullStart() || pos >= node.getEnd()) return undefined;
+            let result: ts.Node | undefined;
+            node.forEachChild((child) => {
+                const r = find(child);
+                if (r) result = r;
+            });
+            return result ?? node;
+        }
+        return find(sourceFile);
+    }
+    protected renderQuickInfoHtml(
+        quickInfo: ts.QuickInfo,
+    ): string {
+        const esc = (s: string) => this.escapeHtml(s);
+
+        const mainSignature = this.partsToText(quickInfo.displayParts);
+        const mainDoc = quickInfo.documentation
+            ? this.partsToText(quickInfo.documentation)
+            : '';
+
+        const codeStyle =
+            'font-family: var(--cm-font-monospace, ui-monospace, SFMono-Regular, Menlo, monospace);' +
+            'white-space: pre-wrap;' +
+            'word-break: break-word;' +
+            'margin: 0;';
+
+        const docStyle =
+            'font-family: inherit;' +
+            'font-size: 0.9em;' +
+            'opacity: 0.85;' +
+            'margin-top: 4px;' +
+            'white-space: pre-wrap;' +
+            'word-break: break-word;';
+
+        const titleStyle =
+            'font-size: 0.85em;' +
+            'font-weight: 600;' +
+            'opacity: 0.7;' +
+            'margin: 6px 0 4px;';
+
+        let html = `<div style="display:block;max-width:560px;">`;
+
+        html += `<div style="display:block;margin:0;"><pre style="${codeStyle}"><code style="${codeStyle}">${esc(
+            mainSignature,
+        )}</code></pre></div>`;
+
+        if (mainDoc) {
+            html += `<div style="${docStyle}">${esc(mainDoc).replace(
+                /\n/g,
+                '<br/>',
+            )}</div>`;
+        }
+
+        html += `</div>`;
+        return html;
     }
     async getDefinition({ uri, pos }: { uri: string, pos: number }): Promise<TsServerNameDefinition[] | null> {
         let path = this.convertUriToPath(uri);
