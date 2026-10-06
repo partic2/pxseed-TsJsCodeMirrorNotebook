@@ -53,7 +53,8 @@ export async function initNotebookCodeEnv(_ENV?:any){
         nbexp.typeDecl.add({uid:__name__+'.ENV',decl:`
 declare let _ENV:any
 declare function deleteVariables(name: string[]): void;
-import { Task } from 'partic2/jsutils1/base';
+import { Task,logger } from 'partic2/jsutils1/base';
+declare let tasks:Record<string,Task>
 interface __type__ENV_jsnotebook_notebookViewer {
     hasMethod(name: string): Promise<boolean>;
     reconnectCodeContextSoon():Promise<void>;

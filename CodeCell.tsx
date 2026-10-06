@@ -355,46 +355,56 @@ export class CodeMirrorCellList extends DefaultCodeCellList{
     protected remoteNotebookFile=new future<{id:string,uri:string}>();
     protected headCell=new Ref2<string>('');
     protected notebookControl?:TypescriptNotebookControl;
-    protected initialized:Promise<void>
+    protected initialized=new future<void>();
     constructor(props:any,ctx:any){
         super(props,ctx);
-        this.initialized=(async ()=>{
-            let defaultService=await defaultTypescriptLanguageServiec.get();
-            let serverSide1=await serverSide.get();
-            let nbPath=await serverSide1.newTempLspNotebookFile();
-            this.notebookControl=new TypescriptNotebookControl(nbPath.uri,defaultService);
-            this.notebookControl.insertPlainTextCell('end',this.headCell);
-            this.setState({});
-        })();
+        this.initialize().then(
+            ()=>{this.initialized.setResult();this.setState({});},
+            (err:any)=>{this.initialized.setException(err);this.setState({});}
+        )
     }
-    _cellModifyMutex=new mutex();
+    async initialize(){
+        let defaultService=await defaultTypescriptLanguageServiec.get();
+        let serverSide1=await serverSide.get();
+        let nbPath=await serverSide1.newTempLspNotebookFile();
+        this.notebookControl=new TypescriptNotebookControl(nbPath.uri,defaultService);
+        this.notebookControl.insertPlainTextCell('end',this.headCell);
+    }
+    protected __pendingSyncNotebookControlFn=new Array<()=>Promise<void>>();
+    protected async __syncNotebookControl(){
+        await this.initialized.get();
+        let snapshot=this.__pendingSyncNotebookControlFn;
+        this.__pendingSyncNotebookControlFn=new Array();
+        for(let t1 of snapshot){
+            await t1();
+        }
+    }
     async newCell(afterCellKey?: string): Promise<string> {
-        await this.initialized;
-        return this._cellModifyMutex.exec(async ()=>{
-            let k=await super.newCell(afterCellKey);
-            let list=this.getCellList();
-            let found=list.findIndex(t1=>t1.key===k);
-            assert(found>=0);
+        let k=await super.newCell(afterCellKey);
+        let list=this.getCellList();
+        let found=list.findIndex(t1=>t1.key===k);
+        assert(found>=0);
+        this.__pendingSyncNotebookControlFn.push(async ()=>{
             let editor=await (await list[found].ref.waitValid() as CodeMirrorCodeCell).rref.codemirrorInputEditor.waitValid();
-            this.notebookControl!.insertEditorCell(found<list.length-1?found+1:'end',editor);
-            this.setState({});
-            return k;
-        });
+            await this.notebookControl!.insertEditorCell(found<list.length-1?found+1:'end',editor);
+        })
+        this.initialized.get().then(()=>this.__syncNotebookControl);
+        return k;
     }
     async deleteCell(cellKey: string): Promise<void> {
-        await this.initialized;
-        await this._cellModifyMutex.exec(async ()=>{
-            let list=this.getCellList();
-            let found=list.findIndex(t1=>t1.key===cellKey)!;
-            if(found>=0){
-                this.notebookControl!.deleteCell(found+1);
-            }
-            await super.deleteCell(cellKey);
-        });
+        let list=this.getCellList();
+        let found=list.findIndex(t1=>t1.key===cellKey)!;
+        if(found>=0){
+            this.__pendingSyncNotebookControlFn.push(async ()=>{
+                await this.notebookControl!.deleteCell(found+1);
+            })
+        }
+        this.initialized.get().then(()=>this.__syncNotebookControl);
+        await super.deleteCell(cellKey);
         
     }
     async changeHeadCell(content:string){
-        await this.initialized
+        await this.initialized.get()
         this.headCell.set(content+'\n');
     }
     protected onTypescriptDeclChange=async ()=>{
@@ -425,6 +435,13 @@ export class CodeMirrorCellList extends DefaultCodeCellList{
             size.height=size.height*0.8;
         }
         (await newWindow.windowRef.waitValid()).layout({width:size.width,height:size.height})
+    }
+    override render(): React.ComponentChild {
+        if(this.initialized.done){
+            return super.render()
+        }else{
+            return null;
+        }
     }
     renderCodeCell(v: { ref: ReactRefEx<CodeCellControl>; key: string; }, index: number, cellCssStyle: React.AllCSSProperties): React.JSX.Element {
         if(this.notebookControl==undefined){
@@ -482,7 +499,7 @@ export class CodeMirrorNotebook extends NotebookViewer{
         await super.doLoad();
     }
     async openNotebookFileInWebui(path:string){
-        await openNewWindow(<CodeMirrorNotebook context={this.props.context} path={path} />,{title:path})
+        await openNewWindow(<CodeMirrorNotebook context={this.props.context} path={path} />,{title:path,layoutHint:__name__+'.notebook'})
     }
     protected renderCodeCellList(): React.JSX.Element {
         return <CodeMirrorCellList codeContext={this.codeContext!} ref={this.rref.ccl} cellProps={{
