@@ -8,7 +8,7 @@ import * as cml from 'partic2/codemirror2026/prebuilt/@codemirror-lint';
 
 import type { TsServerNameDefinition, TsServerWorker } from './worker';
 import { CodeMirrorEditor } from 'partic2/codemirror2026/preact'
-import { logger, mutex, requirejs, sleep } from 'partic2/jsutils1/base';
+import { future, logger, mutex, requirejs, sleep } from 'partic2/jsutils1/base';
 import ts from 'typescript'
 import { openNewWindow } from 'partic2/pComponentUi/workspace';
 import {alert} from 'partic2/pComponentUi/window'
@@ -30,9 +30,21 @@ interface HoverInfo {
   quickInfo: string | undefined;
 }
 
-export class TypescriptCodemirrorEditor<P={}> extends CodeMirrorEditor<P&{
-    tsserver?:TsServerWorker,fileUri?:string,onGotoDefinitionOpenView?:(def:TsServerNameDefinition)=>void
-}>{
+export class TypescriptCodemirrorEditor<P={}> extends CodeMirrorEditor<P&Partial<Pick<TypescriptCodemirrorEditor,
+    'tsserver'|'fileUri'|'onGotoDefinitionOpenView'>>>{
+    onGotoDefinitionOpenView?:(def:TsServerNameDefinition)=>void
+    __tsserver?:TsServerWorker;
+    get tsserver(){
+        return this.__tsserver;
+    }
+    set tsserver(v){
+        this.__tsserver=v;
+        if(v!=undefined){
+            this.remoteDocUpdating.exec(()=>this.syncRemoteDocument());
+        }
+    }
+    fileUri?:string;
+    remoteDocUpdating=new mutex();
     snapshotDocSize=0;
     getDocumentTextForLanguageService(){
         let t1=this.codemirrorEditorView!.state.doc.toString();
@@ -41,13 +53,8 @@ export class TypescriptCodemirrorEditor<P={}> extends CodeMirrorEditor<P&{
     languageServiceDocumentOffset(){
         return 0;
     }
-    remoteDocUpdating=new mutex();
-    tsserver?:TsServerWorker;
-    fileUri?:string;
     constructor(props:any,ctx:any){
         super(props,ctx);
-        this.tsserver=this.props.tsserver;
-        this.fileUri=this.props.fileUri;
         this.setDomEventHandlers({
             mousedown: (event, view) => {
             const isModKey = event.ctrlKey || event.metaKey;
@@ -74,37 +81,39 @@ export class TypescriptCodemirrorEditor<P={}> extends CodeMirrorEditor<P&{
         },
         })
     }
+    async syncRemoteDocument(){
+        if(this.tsserver==undefined)return;
+        let docOffset=this.languageServiceDocumentOffset();
+        let code=this.getDocumentTextForLanguageService();
+        await this.tsserver
+            .updateFile({
+                uri: this.fileUri!,code,
+                range:[docOffset,docOffset+this.snapshotDocSize]
+            });
+        this.snapshotDocSize=code.length;
+    }
     override async componentDidMount(){
         await super.componentDidMount();
         this.addKeybinding({
             key:'Tab',
             run:(v)=>cmac.acceptCompletion(v)
         });
+        await this.remoteDocUpdating.exec(async ()=>this.syncRemoteDocument());
+    }
+    override async onDocumentChangeInClass(update: cmv.ViewUpdate): Promise<void> {
+        await super.onDocumentChangeInClass(update);
         await this.remoteDocUpdating.exec(async ()=>{
+            if(this.tsserver==undefined)return;
             let docOffset=this.languageServiceDocumentOffset();
             let code=this.getDocumentTextForLanguageService();
-            await this.tsserver!
+            await this.tsserver
                 .updateFile({
                     uri: this.fileUri!,code,
                     range:[docOffset,docOffset+this.snapshotDocSize]
                 });
             this.snapshotDocSize=code.length;
         });
-    }
-    override async onDocumentChange(update: cmv.ViewUpdate): Promise<void> {
-        await super.onDocumentChange(update);
-        if(this.tsserver!=undefined){
-            await this.remoteDocUpdating.exec(async ()=>{
-                let docOffset=this.languageServiceDocumentOffset();
-                let code=this.getDocumentTextForLanguageService();
-                await this.tsserver!
-                    .updateFile({
-                        uri: this.fileUri!,code,
-                        range:[docOffset,docOffset+this.snapshotDocSize]
-                    });
-                this.snapshotDocSize=code.length;
-            });
-        }
+        
         let insertedText = "";
         update.changes.iterChanges((fromA, toA, fromB, toB, inserted) => {
             insertedText += inserted.toString();
@@ -139,43 +148,40 @@ export class TypescriptCodemirrorEditor<P={}> extends CodeMirrorEditor<P&{
         return null;
     }
     protected async requestCompletion(context: cmac.CompletionContext): Promise<cmac.CompletionResult | null> {
-        if(this.tsserver!=null){
-            return await this.remoteDocUpdating.exec(async () => {
-                let offset=this.languageServiceDocumentOffset();
-                const cpinfo = await this.tsserver!.getAutocompletion({
-                    uri: this.fileUri!,
-                    pos: context.pos+offset,
-                    explicit: context.explicit,
-                });
-                if(cpinfo==null)return null;
-                let cp=cpinfo.entries;
-                let from=cpinfo.from-offset
-                const kindMap:Record<string,string>={
-                    'var':'variable',
-                    'module':'namespace',
-                    'const':'constant',
-                }
-                const completionEntries = cp.map(t1=>({
-                    label:t1.label,
-                    type:kindMap[String(t1.kind)]??t1.kind,
-                    detail:(t1.details??'')+(t1.description??''),
-                } satisfies cmac.Completion))
-                let completionResult:cmac.CompletionResult={
-                    from,options:completionEntries,
-                    validFor:/^\w*$/
-                }
-                return completionResult;
+        return await this.remoteDocUpdating.exec(async () => {
+            if(this.tsserver==undefined)return null;
+            let offset=this.languageServiceDocumentOffset();
+            const cpinfo = await this.tsserver.getAutocompletion({
+                uri: this.fileUri!,
+                pos: context.pos+offset,
+                explicit: context.explicit,
             });
-        }else{
-            return null;
-        }
+            if(cpinfo==null)return null;
+            let cp=cpinfo.entries;
+            let from=cpinfo.from-offset
+            const kindMap:Record<string,string>={
+                'var':'variable',
+                'module':'namespace',
+                'const':'constant',
+            }
+            const completionEntries = cp.map(t1=>({
+                label:t1.label,
+                type:kindMap[String(t1.kind)]??t1.kind,
+                detail:(t1.details??'')+(t1.description??''),
+            } satisfies cmac.Completion))
+            let completionResult:cmac.CompletionResult={
+                from,options:completionEntries,
+                validFor:/^\w*$/
+            }
+            return completionResult;
+        });
     }
     override async provideLint(view: cmv.EditorView): Promise<cml.Diagnostic[]> {
         if(this.tsserver==null)return [];
         let offset=this.languageServiceDocumentOffset();
         let rangeEnd=offset+this.getDocumentTextForLanguageService().length;
         let lintResult:cml.Diagnostic[];
-        lintResult=await this.tsserver!.getLints({uri:this.fileUri!,range:[offset,offset+rangeEnd]});
+        lintResult=await this.tsserver.getLints({uri:this.fileUri!,range:[offset,offset+rangeEnd]});
         let codemirrorDocLength=this.getCurrentDocumentText().length;
         for(let t1 of lintResult){
             t1.from-=offset;
@@ -196,7 +202,7 @@ export class TypescriptCodemirrorEditor<P={}> extends CodeMirrorEditor<P&{
     override async provideHoverTooltip(view: cmv.EditorView, pos: number, side: number): Promise<cmv.Tooltip | readonly cmv.Tooltip[] | null> {
         if(this.tsserver==null)return null;
         let offset=this.languageServiceDocumentOffset();
-        const hoverData = await this.tsserver!.getHover({
+        const hoverData = await this.tsserver.getHover({
             uri: this.fileUri!,
             pos:pos+offset,
         });
