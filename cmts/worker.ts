@@ -358,16 +358,11 @@ export class TsServerWorker {
         let env = this.env;
         if (!env) return;
         const existing = env.getSourceFile(path);
-
         if (existing) {
             if (code === existing.getFullText()) return false;
             env.updateFile(path, code, range);
-            // This should make initial linting etc faster by making
-            // TypeScript eagerly create the source file object
-            env.getSourceFile(path);
             return true;
         }
-
         env.updateFile(path, code, range);
         env.getSourceFile(path);
         return true;

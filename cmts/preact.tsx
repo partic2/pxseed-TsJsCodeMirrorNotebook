@@ -19,7 +19,6 @@ let __name__=requirejs.getLocalRequireModule(require);
 let log=logger.getLogger(__name__);
 
 
-
 interface HoverInfo {
   start: number;
   end: number;
@@ -29,7 +28,6 @@ interface HoverInfo {
   def: readonly ts.DefinitionInfo[] | undefined;
   quickInfo: string | undefined;
 }
-
 export class TypescriptCodemirrorEditor<P={}> extends CodeMirrorEditor<P&Partial<Pick<TypescriptCodemirrorEditor,
     'tsserver'|'fileUri'|'onGotoDefinitionOpenView'>>>{
     onGotoDefinitionOpenView?:(def:TsServerNameDefinition)=>void
@@ -38,6 +36,7 @@ export class TypescriptCodemirrorEditor<P={}> extends CodeMirrorEditor<P&Partial
         return this.__tsserver;
     }
     set tsserver(v){
+        let prev=this.__tsserver;
         this.__tsserver=v;
         if(v!=undefined){
             this.remoteDocUpdating.exec(()=>this.syncRemoteDocument());
@@ -45,13 +44,13 @@ export class TypescriptCodemirrorEditor<P={}> extends CodeMirrorEditor<P&Partial
     }
     fileUri?:string;
     remoteDocUpdating=new mutex();
-    snapshotDocSize=0;
     getDocumentTextForLanguageService(){
         let t1=this.codemirrorEditorView!.state.doc.toString();
         return t1;
     }
-    languageServiceDocumentOffset(){
-        return 0;
+    languageServiceDocumentLength=0;
+    languageServiceDocumentRange():[number,number]{
+        return [0,this.languageServiceDocumentLength];
     }
     constructor(props:any,ctx:any){
         super(props,ctx);
@@ -69,7 +68,7 @@ export class TypescriptCodemirrorEditor<P={}> extends CodeMirrorEditor<P&Partial
                 (async ()=>{
                     const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
                     if(pos!=null && this.tsserver!=undefined){
-                        let defs=await this.tsserver.getDefinition({uri:this.fileUri!,pos:pos+this.languageServiceDocumentOffset()});
+                        let defs=await this.tsserver.getDefinition({uri:this.fileUri!,pos:pos+this.languageServiceDocumentRange()[0]});
                         if(defs!=null){
                             this.onGotoDefinitionRequest(defs);
                         }
@@ -82,15 +81,15 @@ export class TypescriptCodemirrorEditor<P={}> extends CodeMirrorEditor<P&Partial
         })
     }
     async syncRemoteDocument(){
-        if(this.tsserver==undefined)return;
-        let docOffset=this.languageServiceDocumentOffset();
+        if(this.tsserver==undefined)return;;
         let code=this.getDocumentTextForLanguageService();
+        let range=this.languageServiceDocumentRange();
         await this.tsserver
             .updateFile({
                 uri: this.fileUri!,code,
-                range:[docOffset,docOffset+this.snapshotDocSize]
+                range
             });
-        this.snapshotDocSize=code.length;
+        this.languageServiceDocumentLength=code.length;
     }
     override async componentDidMount(){
         await super.componentDidMount();
@@ -104,14 +103,13 @@ export class TypescriptCodemirrorEditor<P={}> extends CodeMirrorEditor<P&Partial
         await super.onDocumentChangeInClass(update);
         await this.remoteDocUpdating.exec(async ()=>{
             if(this.tsserver==undefined)return;
-            let docOffset=this.languageServiceDocumentOffset();
             let code=this.getDocumentTextForLanguageService();
             await this.tsserver
                 .updateFile({
                     uri: this.fileUri!,code,
-                    range:[docOffset,docOffset+this.snapshotDocSize]
+                    range:this.languageServiceDocumentRange()
                 });
-            this.snapshotDocSize=code.length;
+            this.languageServiceDocumentLength=code.length;
         });
         
         let insertedText = "";
@@ -150,7 +148,7 @@ export class TypescriptCodemirrorEditor<P={}> extends CodeMirrorEditor<P&Partial
     protected async requestCompletion(context: cmac.CompletionContext): Promise<cmac.CompletionResult | null> {
         return await this.remoteDocUpdating.exec(async () => {
             if(this.tsserver==undefined)return null;
-            let offset=this.languageServiceDocumentOffset();
+            let offset=this.languageServiceDocumentRange()[0];
             const cpinfo = await this.tsserver.getAutocompletion({
                 uri: this.fileUri!,
                 pos: context.pos+offset,
@@ -178,7 +176,7 @@ export class TypescriptCodemirrorEditor<P={}> extends CodeMirrorEditor<P&Partial
     }
     override async provideLint(view: cmv.EditorView): Promise<cml.Diagnostic[]> {
         if(this.tsserver==null)return [];
-        let offset=this.languageServiceDocumentOffset();
+        let offset=this.languageServiceDocumentRange()[0];
         let rangeEnd=offset+this.getDocumentTextForLanguageService().length;
         let lintResult:cml.Diagnostic[];
         lintResult=await this.tsserver.getLints({uri:this.fileUri!,range:[offset,offset+rangeEnd]});
@@ -201,7 +199,7 @@ export class TypescriptCodemirrorEditor<P={}> extends CodeMirrorEditor<P&Partial
     };
     override async provideHoverTooltip(view: cmv.EditorView, pos: number, side: number): Promise<cmv.Tooltip | readonly cmv.Tooltip[] | null> {
         if(this.tsserver==null)return null;
-        let offset=this.languageServiceDocumentOffset();
+        let offset=this.languageServiceDocumentRange()[0];
         const hoverData = await this.tsserver.getHover({
             uri: this.fileUri!,
             pos:pos+offset,

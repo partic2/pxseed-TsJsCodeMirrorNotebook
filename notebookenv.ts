@@ -1,6 +1,7 @@
 import { CodeContextEvent, LocalRunCodeContext, TaskLocalEnv } from "partic2/CodeRunner/CodeContext";
 import { GenerateRandomString, requirejs, WaitUntil } from "partic2/jsutils1/base";
 import { getTypescriptModuleTjs } from "partic2/packageManager/nodecompat";
+import {} from 'partic2/JsNotebook/workerinit'
 
 let __name__=requirejs.getLocalRequireModule(require);
 
@@ -19,12 +20,11 @@ export async function initNotebookCodeEnv(_ENV?:any){
             process:async (processContext:{source:string,_ENV:any,declVars:string[]})=>{
                 let compiledCode=ts.transpile(
                     processContext.source,
-                    {target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022,esModuleInterop:false},
+                    {target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022,esModuleInterop:false,verbatimModuleSyntax:true},
                     '__anonymous__.ts',
                     [],
                     '__anonymous__'
                 );
-                compiledCode=compiledCode.replace(/export \{\};/,'');
                 processContext.source=compiledCode;
             }
         })
@@ -64,6 +64,8 @@ interface __type__ENV_jsnotebook {
     callMethodAttachedOnNotebookViewer(name: string, argv?: any[], waitResult?: boolean): Promise<any>;
     callFunctionInNotebookWebui(module:string,fnName:string,args:any[]):Promise<void>;
     notebookViewer: __type__ENV_jsnotebook_notebookViewer;
+    startupScript:string;
+    extra:Record<string,any>;
 }
 declare let jsnotebook: __type__ENV_jsnotebook
 `})

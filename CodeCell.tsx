@@ -41,87 +41,77 @@ DynamicPageCSSManager.PutCss('.'+css.inputCell,[
 ]);
 
 
+class PlainTextCell{
+    text:string='';
+    languageServiceDocumentLength=0;
+    onTextChange?:(cell:PlainTextCell,prev:string,curr:string)=>void;
+    setText(text:string){
+        let prev=this.text;
+        this.text=text;
+        this.onTextChange?.(this,prev,text);
+        return this;
+    }
+}
+
 export class TypescriptNotebookControl{
     remoteDocUpdating=new mutex();
-    cells=new Array<{editor?:NotebookCellTypescriptCodemirrorEditor,plainText?:Ref2<string>,offset?:number}>();
+    cells=new Array<{editor?:NotebookCellTypescriptCodemirrorEditor,plainText?:PlainTextCell}>();
     constructor(public tsFile:string,public tsserver:TsServerWorker){}
-    getDocumentLengthFor(cell:{editor?:NotebookCellTypescriptCodemirrorEditor,plainText?:Ref2<string>}){
-        let len=0;
+    languageServiceDocumentLengthFor(cell:{editor?:NotebookCellTypescriptCodemirrorEditor,plainText?:PlainTextCell}){
         if(cell.plainText!=undefined){
-            len=cell.plainText.get().length;
+            return cell.plainText.languageServiceDocumentLength;
         }else if(cell.editor!=undefined){
-            len=cell.editor.getDocumentTextForLanguageService().length;
+            return cell.editor.languageServiceDocumentLength;
         }
-        return len;
+        assert(false,'cell type error');
     }
-    languageServiceDocumentOffsetFor(cell2:{editor?:NotebookCellTypescriptCodemirrorEditor,plainText?:Ref2<string>}){
+    languageServiceDocumentOffsetFor(cell2:{editor?:NotebookCellTypescriptCodemirrorEditor,plainText?:PlainTextCell}):number{
         let currOffset=0;
         for(let t1=0;t1<this.cells.length;t1++){
             let cell=this.cells[t1];
-            if(cell.offset==undefined){
-                cell.offset=currOffset;
-            }
             if((cell2.plainText!=undefined && cell2.plainText===cell.plainText) ||
                 (cell2.editor!=undefined && cell2.editor==cell.editor)){
-                return cell.offset;
-            }
-            let nextOffset=this.cells.at(t1+1)?.offset;
-            if(nextOffset==undefined){
-                nextOffset=currOffset+this.getDocumentLengthFor(cell);
-            }
-            currOffset=nextOffset;
-        }
-    }
-    onCellDocumentChange(change:{editor?:NotebookCellTypescriptCodemirrorEditor,plainText?:Ref2<string>}){
-        let t1=this.cells.findIndex((t2=>t2.editor==change.editor));
-        if(t1>=0){this.invalidCellsStateSinceIndex(t1);}
-    }
-    invalidCellsStateSinceIndex(index:number){
-        for(let t1=index;t1<this.cells.length;t1++){
-            let cell=this.cells.at(t1);
-            if(cell!=undefined){
-                cell.offset=undefined;
+                return currOffset;
+            }else{
+                currOffset+=this.languageServiceDocumentLengthFor(cell);
             }
         }
+        assert(false,'Cell not found');
+    }
+    onCellDocumentChange(change:{editor?:NotebookCellTypescriptCodemirrorEditor,plainText?:PlainTextCell}){
     }
     insertEditorCell(pos:number|'end',editor:NotebookCellTypescriptCodemirrorEditor){
         if(pos==='end'){
             this.cells.push({editor});
         }else{
             this.cells.splice(pos,0,{editor});
-            this.invalidCellsStateSinceIndex(pos);
         }
         editor.notebookControl=this;
     }
-    insertPlainTextCell(pos:number|'end',plainText:Ref2<string>){
-        if(pos==='end'){
-            this.cells.push({plainText});
-        }else{
-            this.cells.splice(pos,0,{plainText});
-            this.invalidCellsStateSinceIndex(pos);
-        }
-        plainText.watch(this.__plainTextOnChange)
-    }
-    __plainTextOnChange=(r:Ref2<string>,prev:string)=>{
+    insertPlainTextCell(pos:number|'end',plainText:PlainTextCell){
         this.remoteDocUpdating.exec(async ()=>{
-            let offset=this.languageServiceDocumentOffsetFor({plainText:r})??0;
-            await this.tsserver.updateFile({uri:this.tsFile,code:r.get(),range:[offset,offset+prev.length]});
-        }).then(()=>{
-            this.onCellDocumentChange({plainText:r});
-        })
+            if(pos==='end'){
+                this.cells.push({plainText});
+            }else{
+                this.cells.splice(pos,0,{plainText});
+            }
+            plainText.onTextChange=(cell,prev,curr)=>{this.remoteDocUpdating.exec(async ()=>{
+                let offset=this.languageServiceDocumentOffsetFor({plainText:cell});
+                await this.tsserver.updateFile({uri:this.tsFile,code:curr,range:[offset,offset+prev.length]});
+                cell.languageServiceDocumentLength=curr.length;
+                this.onCellDocumentChange({plainText:cell});
+            })}
+        });
+        plainText.setText(plainText.text);
     }
     deleteCell(pos:number){
-        let cell=this.cells[pos];
-        let offset=this.languageServiceDocumentOffsetFor(cell)??0;
-        let end=offset+this.getDocumentLengthFor(cell);
-        this.cells.splice(pos,1);
-        if(cell.plainText!=undefined){
-            cell.plainText.unwatch(this.__plainTextOnChange)
-        }
         this.remoteDocUpdating.exec(async ()=>{
+            let cell=this.cells[pos];
+            let offset=this.languageServiceDocumentOffsetFor(cell);
+            let end=offset+this.languageServiceDocumentLengthFor(cell);
+            this.cells.splice(pos,1);
             await this.tsserver.updateFile({uri:this.tsFile,code:'',range:[offset,end]});
         })
-        this.invalidCellsStateSinceIndex(pos);
     }
 }
 
@@ -146,9 +136,11 @@ export class NotebookCellTypescriptCodemirrorEditor<P={}> extends TypescriptCode
     override getDocumentTextForLanguageService(): string {
         return this.getCurrentDocumentText()+'\n';
     }
-    override languageServiceDocumentOffset(): number {
-        let offset = this.notebookControl?.languageServiceDocumentOffsetFor({editor:this})??0;
-        return offset
+    override languageServiceDocumentRange(): [number, number] {
+        assert(this.notebookControl!=undefined);
+        let offset = this.notebookControl?.languageServiceDocumentOffsetFor({editor:this});
+        let length = this.notebookControl?.languageServiceDocumentLengthFor({editor:this});
+        return [offset,offset+length];
     }
     override async onDocumentChangeInClass(update: cmv.ViewUpdate): Promise<void> {
         this.notebookControl?.onCellDocumentChange({editor:this});
@@ -182,9 +174,6 @@ export class CodeMirrorCodeCell<Props={}> extends CodeCell<Props&Partial<Pick<Co
         let editor=await this.refCodeMirrorInputEditor.waitValid();
         await editor.setCurrentDocumentText(input)
     }
-    setCellOutput(output:any,resultVariable?:string|null){
-        this.setState({cellOutput:output,resultVariable,errorCatched:null});
-    }
     getCellInputHtml(){
         return this.refCodeMirrorInputEditor.current?.containerDiv.current?.innerHTML??null;
     }
@@ -216,7 +205,7 @@ export class CodeMirrorCodeCell<Props={}> extends CodeCell<Props&Partial<Pick<Co
 
 export class CodeMirrorCellList<Props={}> extends DefaultCodeCellList<Props>{
     protected remoteNotebookFile=new future<{id:string,uri:string}>();
-    protected headCell=new Ref2<string>('');
+    protected headCell=new PlainTextCell();
     protected notebookControl?:TypescriptNotebookControl;
     constructor(props:any,ctx:any){
         super(props,ctx);
@@ -247,7 +236,7 @@ export class CodeMirrorCellList<Props={}> extends DefaultCodeCellList<Props>{
             let editor=await (await list[found].ref.waitValid() as CodeMirrorCodeCell).refCodeMirrorInputEditor.waitValid();
             this.notebookControl!.insertEditorCell(found<list.length-1?found+1:'end',editor);
         })
-        this.initialized.get().then(()=>this.__syncNotebookControl());
+        this.__syncNotebookControl();
         return k;
     }
     async deleteCell(cellKey: string): Promise<void> {
@@ -255,16 +244,16 @@ export class CodeMirrorCellList<Props={}> extends DefaultCodeCellList<Props>{
         let found=list.findIndex(t1=>t1.key===cellKey)!;
         if(found>=0){
             this.__pendingSyncNotebookControlFn.push(async ()=>{
-                await this.notebookControl!.deleteCell(found+1);
+                this.notebookControl!.deleteCell(found+1);
             })
         }
-        this.initialized.get().then(()=>this.__syncNotebookControl());
+        this.__syncNotebookControl();
         await super.deleteCell(cellKey);
         
     }
     async changeHeadCell(content:string){
         await this.initialized.get()
-        this.headCell.set(content+'\n');
+        this.headCell.setText(content+'\n');
     }
     protected onTypescriptDeclChange=async ()=>{
         if(this.codeContext==undefined)return;
