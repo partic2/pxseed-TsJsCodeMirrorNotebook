@@ -1,17 +1,13 @@
 import { EventBuffer, Singleton } from 'partic2/CodeRunner/jsutils2';
 import { importRemoteModule, easyCallRemoteJsonFunction, openConnectionFromUrl, IoOverPxprpc } from 'partic2/pxprpcClient/pxseedremotefuncs';
-import { getPersistentRegistered, ServerHostRpc, ServerHostWorker1Rpc, ServerHostWorker1RpcName } from 'partic2/pxprpcClient/registry';
-import { LanguageServerConnection } from 'partic2/typescriptLanguageServer2026/pxseedutils/lspproxy';
-import { Transport } from 'partic2/codemirror2026/lsp-client/index';
-import { ReactRefEx } from 'partic2/pComponentUi/domui';
-import * as cmlsp from 'partic2/codemirror2026/lsp-client/index'
+import { getPersistentRegistered, ServerHostRpc, ServerHostWorker1Rpc, ServerHostWorker1RpcName, ServerHostWorker3ForComputeRpc } from 'partic2/pxprpcClient/registry';
 import { GenerateRandomString, requirejs, Task, throwIfAbortError } from 'partic2/jsutils1/base';
 import { TjsSfs } from 'partic2/CodeRunner/JsEnviron';
 import { tjsFrom } from 'partic2/tjshelper/tjsonjserpc';
 import * as React from 'preact'
 import { RpcExtendClient1 } from 'pxprpc/extend';
 import { Client } from 'pxprpc/base';
-import { buildTjs } from '../tjshelper/tjsbuilder';
+import { buildTjs } from 'partic2/tjshelper/tjsbuilder';
 
 let __name__=requirejs.getLocalRequireModule(require);
 
@@ -64,16 +60,9 @@ export class SimpleLogViewer extends React.Component<
     }
 }
 
-async function TypescriptServerWorkerFactory(){
-    return new RpcExtendClient1(new Client(
-        (await openConnectionFromUrl(
-            `iooverpxprpc:server host/${encodeURIComponent('webworker:'+__name__+'.TypescriptServerWorker')}`)
-        )!)).init();
-}
 
-export let TypescriptServerWorker=new Singleton(TypescriptServerWorkerFactory)
 export let defaultTypescriptLanguageServiec=new Singleton(async ()=>{
-    let t=await importRemoteModule(TypescriptServerWorker,'partic2/TsJsCodeMirrorNotebook/cmts/worker') as typeof import('partic2/TsJsCodeMirrorNotebook/cmts/worker')
+    let t=await importRemoteModule(ServerHostWorker3ForComputeRpc,'partic2/TsJsCodeMirrorNotebook/cmts/worker') as typeof import('partic2/TsJsCodeMirrorNotebook/cmts/worker')
     return await t.createTsServerWorker()
 })
 export let serverSide=new Singleton(async ()=>{
