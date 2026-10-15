@@ -83,36 +83,6 @@ function tsCategoryToSeverity(
     }
 }
 
-function getLineAtPosition(code: string, position: number) {
-    // lineStart is the index of line break or zero
-    const from = code.lastIndexOf("\n", position - 1) + 1;
-    let to = code.indexOf("\n", position);
-    if (to === -1) {
-        to = code.length;
-    }
-    const text = code.slice(from, to);
-    return {
-        from,
-        to,
-        text,
-    };
-}
-
-const DEFAULT_CODEMIRROR_TYPE_ICONS = new Set([
-    "class",
-    "constant",
-    "enum",
-    "function",
-    "interface",
-    "keyword",
-    "method",
-    "namespace",
-    "property",
-    "text",
-    "type",
-    "variable",
-]);
-
 function ensureAnchor(expr: RegExp, start: boolean) {
     const { source } = expr;
     // biome-ignore lint/style/useSingleVarDeclarator: vendor

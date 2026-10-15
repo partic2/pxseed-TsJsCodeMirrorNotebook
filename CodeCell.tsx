@@ -24,15 +24,6 @@ export var css={
 }
 
 
-interface CodeCellStats{
-    //Serializable object
-    cellOutput:any,
-    resultVariable:string|null,
-    focusin:boolean,
-    errorCatched:string|null,
-    runCodeKey?:'Ctl+Ent'|'Enter'
-}
-
 
 DynamicPageCSSManager.PutCss('.'+css.outputCell,['overflow:auto']);
 DynamicPageCSSManager.PutCss('.'+css.inputCell,[
@@ -157,14 +148,6 @@ export class CodeMirrorCodeCell<Props={}> extends CodeCell<Props&Partial<Pick<Co
     onGotoDefinitionOpenView?:(def:TsServerNameDefinition)=>void;
     notebookControl?:TypescriptNotebookControl;
     refCodeMirrorInputEditor=new ReactRefEx<NotebookCellTypescriptCodemirrorEditor>();
-    override set codeContext(cur:RunCodeContext|undefined){
-        let prev=this.codeContext;
-        super.codeContext=cur;
-        prev?.event.removeEventListener(`${__name__}.CodeCell.callWebuiFunction`,this.codeContextCallMethodEvent);
-        cur?.event.addEventListener(`${__name__}.CodeCell.callWebuiFunction`,this.codeContextCallMethodEvent);
-        
-    }
-    override get codeContext(){return super.codeContext}
     getCellInput(){
         if(this.refCodeMirrorInputEditor.current==undefined)return '';
         let t1=this.refCodeMirrorInputEditor.current.getCurrentDocumentText();
