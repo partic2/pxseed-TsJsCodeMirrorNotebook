@@ -165,7 +165,7 @@ export class TypescriptCodemirrorEditor<P={}> extends CodeMirrorEditor<P&Partial
             const completionEntries = cp.map(t1=>({
                 label:t1.label,
                 type:kindMap[String(t1.kind)]??t1.kind,
-                detail:(t1.details??'')+(t1.description??''),
+                detail:(t1.details??''),
             } satisfies cmac.Completion))
             let completionResult:cmac.CompletionResult={
                 from,options:completionEntries,

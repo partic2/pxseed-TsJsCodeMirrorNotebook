@@ -1,15 +1,34 @@
+//worker.ts
 import { RpcSerializeMagicMark } from "partic2/pxprpcClient/pxseedremotefuncs";
 import ts from 'typescript'
 import { type Diagnostic, type LintSource } from "partic2/codemirror2026/prebuilt/@codemirror-lint";
 import { assert, GetCurrentTime, logger, requirejs } from "partic2/jsutils1/base";
 import { getWWWRoot, path } from "partic2/jsutils1/webutils";
-import { getSimpleFileSysteNormalizedWWWRoot } from "partic2/CodeRunner/JsEnviron";
+import { defaultFileSystem, ensureDefaultFileSystem, getSimpleFileSysteNormalizedWWWRoot } from "partic2/CodeRunner/JsEnviron";
 import { buildTjs } from "partic2/tjshelper/tjsbuilder";
 import { utf8conv } from "partic2/CodeRunner/jsutils2";
+import { AsyncMemorySystem, createAsyncMemorySystem } from "./vfs";
 
 let __name__ = requirejs.getLocalRequireModule(require);
 let log = logger.getLogger(__name__);
 
+// ---------- 路径工具 ----------
+// webutils.path 兼容 Node path，优先用 posix 语义避免 Windows 分隔符
+const P: {
+    join: (...parts: string[]) => string;
+    dirname: (p: string) => string;
+    basename: (p: string) => string;
+} = (path as any).posix ?? path;
+
+/** 把 VFS 内的绝对路径转成传给 SimpleFileSystem 的路径（相对 dataDir） */
+function absToFsPath(absPath: string, rootDir: string): string {
+    const r = rootDir.replace(/\/+$/, '');
+    if (absPath === r) return '';
+    if (absPath.startsWith(r + '/')) return absPath.slice(r.length + 1);
+    return absPath;
+}
+
+// ---------- 诊断转换 ----------
 function isDiagnosticWithLocation(
     diagnostic: ts.Diagnostic,
 ): diagnostic is ts.DiagnosticWithLocation {
@@ -20,32 +39,18 @@ function isDiagnosticWithLocation(
     );
 }
 
-/**
- * Get the message for a diagnostic. TypeScript
- * is kind of weird: messageText might have the message,
- * or a pointer to the message. This follows the chain
- * to get a string, regardless of which case we're in.
- */
 function tsDiagnosticMessage(
     diagnostic: Pick<ts.Diagnostic, "messageText">,
 ): string {
     if (typeof diagnostic.messageText === "string") {
         return diagnostic.messageText;
     }
-    // TODO: go through linked list
     return diagnostic.messageText.messageText;
 }
 
-/**
- * TypeScript and CodeMirror have slightly different
- * ways of representing diagnostics. This converts
- * from one to the other.
- */
 function convertTSDiagnosticToCM(
     d: ts.DiagnosticWithLocation,
 ): Diagnostic {
-    // We add some code at the end of the document, but we can't have a
-    // diagnostic in an invalid range
     const start = d.start;
     const message = tsDiagnosticMessage(d);
 
@@ -57,16 +62,10 @@ function convertTSDiagnosticToCM(
     };
 }
 
-/**
- * TypeScript has a set of diagnostic categories,
- * which maps roughly onto CodeMirror's categories.
- * Here, we do the mapping.
- */
 function tsCategoryToSeverity(
     diagnostic: Pick<ts.DiagnosticWithLocation, "category" | "code">,
 ): Diagnostic["severity"] {
     if (diagnostic.code === 7027) {
-        // Unreachable code detected
         return "warning";
     }
     switch (diagnostic.category) {
@@ -81,12 +80,42 @@ function tsCategoryToSeverity(
     }
 }
 
-const ExternalLiteralMagicMark='@@ExternalLiteralMagicMark@@'
+const ExternalLiteralMagicMark = '@@ExternalLiteralMagicMark@@';
+
+type AsyncMethod<F> = F extends (...args: infer A) => infer R
+    ? (...args: A) => Promise<Awaited<R>>
+    : F;
+
+type AsyncProxy<T> = {
+    [K in keyof T]: AsyncMethod<T[K]>;
+};
+
+type Invoker = (
+    originalFn: (...args: any[]) => any,
+    thisArg: any,
+    args: any[]
+) => Promise<any> | any;
+
+export function createAsyncProxy<T extends object>(
+    target: T,
+    invoker: Invoker
+): AsyncProxy<T> {
+    return new Proxy(target, {
+        get(t, prop, receiver) {
+            const value = Reflect.get(t, prop, receiver);
+            if (typeof value !== 'function') {
+                return value;
+            }
+            return (...args: any[]) =>
+                Promise.resolve(invoker(value as (...args: any[]) => any, t, args));
+        },
+    }) as AsyncProxy<T>;
+}
 
 class NodeLanguageServerEnvironment {
     [RpcSerializeMagicMark] = {}
     lsHost?: ts.LanguageServiceHost
-    languageService?: ts.LanguageService
+    languageService?: AsyncProxy<ts.LanguageService>
     openedScripts = new Map<string, { version: string, snapshot?: ts.IScriptSnapshot }>();
     compileSetting: ts.CompilerOptions = {
         target: ts.ScriptTarget.ESNext,
@@ -97,12 +126,33 @@ class NodeLanguageServerEnvironment {
     }
     projectVersion = 0;
     pxseedLibBaseDir = '';
-    constructor(public sys: ts.System) { }
+    sys!: ts.System;
+    vfs?: AsyncMemorySystem
+
+    async waitPending(): Promise<{ fileSystemChanged: boolean }> {
+        if (this.vfs != undefined) {
+            if (this.vfs.pending.length > 0) {
+                await this.vfs.waitPending();
+                this.projectVersion++;
+                return { fileSystemChanged: true };
+            }
+        }
+        return { fileSystemChanged: false };
+    }
+
+    async initializeVfs() {
+        await ensureDefaultFileSystem();
+        await defaultFileSystem!.ensureInited();
+        this.vfs = await createAsyncMemorySystem({ fs: defaultFileSystem! })
+        this.sys = this.vfs.system;
+    }
 
     async initialize() {
-        let fs = await import('fs');
-        let path = await import('path');
-        this.pxseedLibBaseDir = path.join(getWWWRoot(), '..', 'source');
+        await this.initializeVfs();
+        if (this.sys == undefined) {
+            this.sys = ts.sys;
+        }
+        this.pxseedLibBaseDir = path.join(getSimpleFileSysteNormalizedWWWRoot(), '..', 'source');
         if (this.compileSetting.paths!['*'] == undefined) {
             this.compileSetting.paths!['*'] = [this.pxseedLibBaseDir + '/*'];
         }
@@ -122,10 +172,10 @@ class NodeLanguageServerEnvironment {
                 if (s != undefined) {
                     return s.snapshot
                 }
-                if (!fs.existsSync(fileName)) return undefined;
-                return ts.ScriptSnapshot.fromString(fs.readFileSync(fileName, 'utf-8'));
+                if (!this.sys.fileExists(fileName)) return undefined;
+                return ts.ScriptSnapshot.fromString(this.sys.readFile(fileName) ?? '');
             },
-            getCurrentDirectory: () => process.cwd(),
+            getCurrentDirectory: () => this.vfs?.rootDir ?? process.cwd(),
             getCompilationSettings: () => this.compileSetting,
             getDefaultLibFileName: (options) => ts.getDefaultLibFilePath(options),
             fileExists: (path) => {
@@ -135,19 +185,26 @@ class NodeLanguageServerEnvironment {
                 return this.sys.fileExists(path);
             },
             readFile: this.sys.readFile,
-            readDirectory: this.sys.readDirectory,
+            readDirectory: (...argv: any[]) => {
+                return (this.sys.readDirectory as any)(...argv);
+            }
         };
-        // 不再装饰，直接使用原生 LanguageService
-        this.languageService = ts.createLanguageService(this.lsHost);
+        this.languageService = createAsyncProxy(ts.createLanguageService(this.lsHost), async (fn, thisArg, args) => {
+            let result = undefined;
+            do {
+                result = await fn.apply(thisArg, args);
+            } while ((await this.waitPending()).fileSystemChanged)
+            return result;
+        });
         return this;
     }
 
-    getSignaturesFromSymbol(
+    async getSignaturesFromSymbol(
         path: string,
         pos: number,
-    ): { signature: string; documentation: string }[] {
+    ): Promise<{ signature: string; documentation: string }[]> {
         const ls = this.languageService;
-        const program = ls?.getProgram();
+        const program = await ls?.getProgram();
         if (!ls || !program) return [];
 
         try {
@@ -178,7 +235,7 @@ class NodeLanguageServerEnvironment {
                     sig,
                     target,
                     ts.TypeFormatFlags.NoTruncation |
-                        ts.TypeFormatFlags.WriteArrowStyleSignature,
+                    ts.TypeFormatFlags.WriteArrowStyleSignature,
                 );
                 const docs = sig.getDocumentationComment(checker);
                 const docText = ts.displayPartsToString(docs);
@@ -206,8 +263,8 @@ class NodeLanguageServerEnvironment {
         return find(sourceFile);
     }
 
-    getSourceFile(fileName: string): ts.SourceFile | undefined {
-        let r = this.languageService?.getProgram()?.getSourceFile(fileName)
+    async getSourceFile(fileName: string): Promise<ts.SourceFile | undefined> {
+        let r = (await this.languageService?.getProgram())?.getSourceFile(fileName)
         return r;
     }
 
@@ -244,74 +301,108 @@ export interface TsServerNameDefinition {
     summary: string
 }
 
-export interface TsServerNameDefinition {
-    uri: string,
-    name: string,
-    span: [number, number],
-    summary: string
-}
-
-/**
- * 缓存一个自定义 JS 补全模块的导出内容。
- *  - getSync() 同步返回，miss 时返回空数组并触发后台异步加载
- *  - getValidatorSync() 类似，用于 TypeCustom 值校验
- */
 interface CustomModuleExports {
     mtimeMs: number;
     getCompletions?: () => any[];
     validate?: (value: unknown) => string | null | undefined;
 }
 
-class CustomCompletionCache {
-    private cache = new Map<string, CustomModuleExports>();
-    private pending = new Map<string, Promise<void>>();
 
-    private loadModule(absPath: string): Promise<CustomModuleExports> {
-        return import(/* @vite-ignore */ absPath + '?t=' + Date.now())
-            .then(mod => ({
-                mtimeMs: 0,
-                getCompletions: typeof mod.getCompletions === 'function' ? mod.getCompletions : undefined,
-                validate: typeof mod.validate === 'function' ? mod.validate : undefined,
-            }))
-            .catch(err => {
-                log.warning(`load custom completion module failed: ${absPath}`, err);
-                return { mtimeMs: 0 } as CustomModuleExports;
-            });
-    }
-
-    private ensureFresh(absPath: string, mtimeMs: number) {
-        if (this.pending.has(absPath)) return;
-        const hit = this.cache.get(absPath);
-        if (hit && hit.mtimeMs === mtimeMs) return;
-        const p = this.loadModule(absPath)
-            .then(mod => {
-                mod.mtimeMs = mtimeMs;
-                this.cache.set(absPath, mod);
-            })
-            .finally(() => this.pending.delete(absPath));
-        this.pending.set(absPath, p);
-    }
-
-    getSync(absPath: string, mtimeMs: number): CustomModuleExports | undefined {
-        this.ensureFresh(absPath, mtimeMs);
-        return this.cache.get(absPath);
-    }
-}
-
-export let externalLiteralTypeRegistry=new Map<string,{
-    getAutocompletion?:(a0:{uri:string, pos:number, explicit:boolean,tsserver:TsServerWorker})=>
-        Promise<Array<{label:string,kind?:string,details?:string}>>
+// ============================================================
+// 外部字面量类型注册表
+// ============================================================
+export let externalLiteralTypeRegistry = new Map<string, {
+    getAutocompletion?:(a0:{
+        uri: string,
+        pos: number,
+        explicit: boolean,
+        tsserver: TsServerWorker,
+        node: ts.StringLiteral
+    }) => Promise<Array<{label: string, kind?: string, details?: string}>>
 }>();
 
+/**
+ * DefaultSimpleFileSystemPath：通过 defaultFileSystem.listdir 做文件/目录路径补全。
+ *
+ * 语义：
+ *  - 光标前的路径片段按 `/` 切分为 dirPart + prefix
+ *  - dirPart 为空 → 列当前文件所在目录
+ *  - dirPart 以 `/` 开头 → 相对 VFS 根（rootDir）
+ *  - dirPart 以 `./` / `../` 开头或其他 → 相对当前文件所在目录
+ *  - 返回 label 是完整路径（因为主流程把替换范围设为字面量内部起点）
+ */
+externalLiteralTypeRegistry.set('DefaultSimpleFileSystemPath', {
+    async getAutocompletion({ node, tsserver, pos }) {
+        const env = tsserver.env;
+        const vfs = env?.vfs;
+        if (!env || !vfs || !defaultFileSystem) return [];
 
+        const sourceFile = node.getSourceFile();
+        const contentStart = node.getStart() + 1;
+        const stringEnd = node.getEnd() - 1;
+        // 钳制光标到字面量内部，避免落在引号外
+        const cursorPos = Math.max(contentStart, Math.min(pos, stringEnd));
+        // 直接从源码截取，避免 node.text 的 escape 解码导致偏移错位
+        const partialPath = sourceFile.text
+            .slice(contentStart, cursorPos)
+            .replace(/\\/g, '/');
 
-externalLiteralTypeRegistry
+        const lastSep = partialPath.lastIndexOf('/');
+        const dirPart = lastSep >= 0 ? partialPath.slice(0, lastSep + 1) : '';
+        const prefix = partialPath.slice(lastSep + 1);
 
+        const rootDir = vfs.rootDir.replace(/\/+$/, '');
+        const currentDir = P.dirname(sourceFile.fileName.replace(/\\/g, '/'));
+
+        // 计算要列出的绝对目录
+        let absDir: string;
+        if (dirPart === '') {
+            absDir = currentDir;
+        } else if (dirPart.startsWith('/')) {
+            // 以 `/` 开头视为相对 VFS 根
+            absDir = P.join(rootDir, dirPart.replace(/^\/+/, ''));
+        } else {
+            // 相对当前文件（含 ./ ../ 和普通相对）
+            absDir = P.join(currentDir, dirPart);
+        }
+        // 规范化：去掉尾部分隔符，处理 .. 等
+        absDir = P.dirname(P.join(absDir, '__placeholder__.tmp'));
+
+        // 转成传给 SimpleFileSystem 的路径（相对 dataDir）
+        const fsDir = absToFsPath(absDir, rootDir);
+
+        let list: Array<{ name: string; type: 'dir' | 'file' }>;
+        try {
+            list = await defaultFileSystem.listdir(fsDir);
+        } catch (e) {
+            log.warning('DefaultSimpleFileSystemPath listdir failed', fsDir, e);
+            return [];
+        }
+
+        const lowerPrefix = prefix.toLowerCase();
+        const entries: Array<{ label: string; kind: string }> = [];
+
+        for (const item of list) {
+            if (lowerPrefix && !item.name.toLowerCase().startsWith(lowerPrefix)) continue;
+            const isDir = item.type === 'dir';
+            entries.push({
+                // 完整路径：dirPart + 名字（目录带尾部斜杠，便于继续下钻）
+                label: dirPart + item.name + (isDir ? '/' : ''),
+                kind: isDir ? 'directory' : 'file',
+            });
+        }
+
+        return entries;
+    }
+});
+
+// ============================================================
+// TsServerWorker
+// ============================================================
 export class TsServerWorker {
     [RpcSerializeMagicMark] = {};
     initialized = false;
     env?: NodeLanguageServerEnvironment;
-    private customCache = new CustomCompletionCache();
 
     constructor(env: NodeLanguageServerEnvironment) {
         this.env = env;
@@ -346,16 +437,10 @@ export class TsServerWorker {
     // 上下文分析
     // ---------------------------------------------------------------------
 
-    /**
-     * 判断光标是否位于模块说明符字符串字面量内（静态 import/export 或动态 import()），
-     * 返回用于路径补全的上下文：
-     *  - partialPath: 字符串内容中光标前的部分
-     *  - segmentStart: 最后一个 '/' 之后的绝对位置
-     */
-    protected getImportStringContext(fileName: string, position: number) {
+    protected async getImportStringContext(fileName: string, position: number) {
         const env = this.env;
         if (!env) return null;
-        const program = env.languageService?.getProgram();
+        const program = await env.languageService?.getProgram();
         if (!program) return null;
         const sourceFile = program.getSourceFile(fileName);
         if (!sourceFile) return null;
@@ -387,12 +472,7 @@ export class TsServerWorker {
         return { nodeStart: node.getStart(), partialPath, segmentStart };
     }
 
-    /**
-     * 目录补全：逐段替换语义，只替换最后一个 '/' 之后的部分。
-     */
     protected async getImportCompletions(partialPath: string) {
-        const fs = await import('fs');
-        const path = await import('path');
         const baseDir = this.env!.pxseedLibBaseDir;
 
         const entries: ts.CompletionEntry[] = [];
@@ -409,14 +489,14 @@ export class TsServerWorker {
             );
             dirToList = path.dirname(target);
         }
-        if (!fs.existsSync(dirToList) || !fs.statSync(dirToList).isDirectory()) {
+        if (await defaultFileSystem!.filetype(dirToList) !== 'dir') {
             return entries;
         }
 
         const lastSegment = endsWithSlash ? '' : (normalized.split('/').pop() || '');
-        const files = fs.readdirSync(dirToList, { withFileTypes: true });
+        const files = await defaultFileSystem!.listdir(dirToList);
         for (const file of files) {
-            if (!file.isDirectory()) continue;
+            if (file.type != 'dir') continue;
             if (lastSegment && !file.name.toLowerCase().startsWith(lastSegment.toLowerCase())) {
                 continue;
             }
@@ -430,7 +510,6 @@ export class TsServerWorker {
         return entries;
     }
 
-
     // ---------------------------------------------------------------------
     // 对外 RPC
     // ---------------------------------------------------------------------
@@ -439,14 +518,14 @@ export class TsServerWorker {
         let path = this.convertUriToPath(uri);
         let env = this.env;
         if (!env) return;
-        const existing = env.getSourceFile(path);
+        const existing = await env.getSourceFile(path);
         if (existing) {
             if (code === existing.getFullText()) return false;
             env.updateFile(path, code, range);
             return true;
         }
         env.updateFile(path, code, range);
-        env.getSourceFile(path);
+        await env.getSourceFile(path);
         return true;
     }
 
@@ -458,17 +537,16 @@ export class TsServerWorker {
         let path = this.convertUriToPath(uri);
         let env = this.env;
         if (!env) return [];
-        const exists = env.getSourceFile(path);
+        const exists = await env.getSourceFile(path);
         if (!exists) return [];
 
-        const syntaticDiagnostics = env.languageService!.getSyntacticDiagnostics(path);
-        const semanticDiagnostics = env.languageService!.getSemanticDiagnostics(path);
+        const syntaticDiagnostics = await env.languageService!.getSyntacticDiagnostics(path);
+        const semanticDiagnostics = await env.languageService!.getSemanticDiagnostics(path);
 
         let diagnostics = [...syntaticDiagnostics, ...semanticDiagnostics].filter(
             (diagnostic): diagnostic is ts.DiagnosticWithLocation =>
                 isDiagnosticWithLocation(diagnostic),
         );
-
 
         if (range != undefined) {
             diagnostics = diagnostics.filter(t1 => t1.start >= range[0] && t1.start <= range[1]);
@@ -478,25 +556,26 @@ export class TsServerWorker {
     }
 
     async getAutocompletion({ uri, pos, explicit }: { uri: string; pos: number, explicit: boolean }) {
-        let path = this.convertUriToPath(uri);
-        let env = this.env;
+        const path = this.convertUriToPath(uri);
+        const env = this.env;
         if (!env) return null;
 
-        const program = env.languageService?.getProgram();
+        const program = await env.languageService?.getProgram();
         const sourceFile = program?.getSourceFile(path);
         if (!sourceFile) return null;
         const rawContents = sourceFile.getFullText();
-        if (!rawContents) return null;
+        if (rawContents === undefined) return null;
 
-       
-        // 1. import 目录补全
-        const importCtx = this.getImportStringContext(path, pos);
+        // 光标处节点：import 路径补全和外部字面量补全共用
+        const node = env.findNodeAtPosition(sourceFile, pos);
+
+        // 1. import 模块说明符：目录补全
+        const importCtx = await this.getImportStringContext(path, pos);
         if (importCtx) {
             const dirEntries = await this.getImportCompletions(importCtx.partialPath);
             const segmentStart = Math.min(importCtx.segmentStart, pos);
 
-            // 与 TS 自身的模块说明符补全合并
-            const baseInfo = env.languageService!.getCompletionsAtPosition(
+            const baseInfo = await env.languageService!.getCompletionsAtPosition(
                 path, pos,
                 {
                     includeCompletionsForModuleExports: true,
@@ -520,8 +599,8 @@ export class TsServerWorker {
             // 继续走默认逻辑
         }
 
-        // 2. 默认
-        const completionInfo = env.languageService!.getCompletionsAtPosition(
+        // 2. 默认补全 + 外部字面量补全
+        const completionInfo = await env.languageService!.getCompletionsAtPosition(
             path, pos,
             {
                 includeCompletionsForModuleExports: true,
@@ -530,29 +609,46 @@ export class TsServerWorker {
             {},
         );
         if (!completionInfo) return null;
-        let entries=new Array<{label:string,kind:string,details?:string}>();
-        for(let t1 of completionInfo.entries){
-            if(t1.name.startsWith(ExternalLiteralMagicMark)){
-                let literalSourceName=t1.name.substring(ExternalLiteralMagicMark.length);
-                let source=externalLiteralTypeRegistry.get(literalSourceName);
-                if(source?.getAutocompletion!=undefined){
-                    for(let t2 of await source.getAutocompletion({uri, pos, explicit,tsserver:this})){
-                        if(t2.kind==undefined){
-                            t2.kind='literal';
-                        }
-                        entries.push(t2 as any)
+
+        const entries = new Array<{ label: string; kind: string; details?: string }>();
+        // 若产生外部字面量补全，from 必须锚定到字面量内部起点，
+        // 否则 label（完整路径）会被插到光标位置导致路径重复。
+        let magicLiteralFrom: number | undefined = undefined;
+
+        for (let t1 of completionInfo.entries) {
+            if (
+                t1.name.startsWith(ExternalLiteralMagicMark) &&
+                node != undefined &&
+                ts.isStringLiteral(node)
+            ) {
+                if (magicLiteralFrom === undefined) {
+                    magicLiteralFrom = node.getStart() + 1;
+                }
+                const literalSourceName = t1.name.substring(ExternalLiteralMagicMark.length);
+                const source = externalLiteralTypeRegistry.get(literalSourceName);
+                if (source?.getAutocompletion != undefined) {
+                    for (const t2 of await source.getAutocompletion({
+                        uri, pos, explicit, tsserver: this, node,
+                    })) {
+                        if (t2.kind == undefined) t2.kind = 'literal';
+                        entries.push(t2 as any);
                     }
                 }
-            }else{
+            } else {
                 entries.push({
                     label: t1.name,
                     kind: t1.kind,
                     details: t1.labelDetails?.detail,
-                })
+                });
             }
         }
-        log.debug(entries);
-        return { from: completionInfo.optionalReplacementSpan?.start ?? pos, entries };
+
+        const from =
+            magicLiteralFrom !== undefined
+                ? magicLiteralFrom
+                : completionInfo.optionalReplacementSpan?.start ?? pos;
+
+        return { from, entries };
     }
 
     async getHover({ uri, pos }: { uri: string; pos: number }) {
@@ -564,15 +660,15 @@ export class TsServerWorker {
         try {
             const ls = env.languageService!;
 
-            const quickInfo = ls.getQuickInfoAtPosition(path, sourcePos);
+            let quickInfo = await ls.getQuickInfoAtPosition(path, sourcePos);
             if (!quickInfo) {
                 return null;
             }
 
             const start = quickInfo.textSpan.start;
 
-            const typeDef = ls.getTypeDefinitionAtPosition(path, sourcePos);
-            const def = ls.getDefinitionAtPosition(path, sourcePos);
+            let typeDef = await ls.getTypeDefinitionAtPosition(path, sourcePos);
+            let def = await ls.getDefinitionAtPosition(path, sourcePos);
 
             const html = this.renderQuickInfoHtml(quickInfo);
 
@@ -640,7 +736,7 @@ export class TsServerWorker {
         let path = this.convertUriToPath(uri);
         let env = this.env;
         if (!env) return null;
-        let defs = env.languageService!.getDefinitionAtPosition(path, pos);
+        let defs = await env.languageService!.getDefinitionAtPosition(path, pos);
         if (defs == undefined) return null;
         let result = new Array<TsServerNameDefinition>();
         let tjs = await buildTjs();
@@ -665,9 +761,8 @@ export class TsServerWorker {
     }
 }
 
-
 export let lastCreateTsServerWorker: TsServerWorker | null = null;
 export async function createTsServerWorker() {
-    lastCreateTsServerWorker = await new TsServerWorker(new NodeLanguageServerEnvironment(ts.sys)).initialize();
+    lastCreateTsServerWorker = await new TsServerWorker(new NodeLanguageServerEnvironment()).initialize();
     return lastCreateTsServerWorker;
 }
