@@ -330,12 +330,11 @@ export class CodeMirrorNotebook extends NotebookViewer{
         await super.doLoad();
     }
     async openNotebookFileInWebui(path:string){
-        await openNewWindow(<CodeMirrorNotebook context={this.props.context} path={path} />,{title:path,layoutHint:__name__+'.notebook'})
+        await openNewWindow(<CodeMirrorNotebook contextRpc={this.props.contextRpc} notebookPath={path} />,{title:path,layoutHint:__name__+'.notebook'})
     }
     protected renderCodeCellList(): React.JSX.Element {
-        return <CodeMirrorCellList codeContext={this.codeContext!} ref={this.rref.ccl} cellProps={{
+        return <CodeMirrorCellList codeContext={this.codeContext!} ref={this.reactCodeCellList} cellProps={{
             onInputChange:(target)=>this.onCellInputChange(target)
         }}/>
     }
 }
-

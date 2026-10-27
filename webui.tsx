@@ -24,7 +24,7 @@ export async function codeMirrorNotebookFactory(){
 class NotebookViewerContainer extends React.Component<{context:{rpc:ClientInfo},path:string},{notebookViewerImpl?:{new(prop:any,ctx:any):NotebookViewer}}>{
     render(props?: Readonly<React.Attributes & { children?: React.ComponentChildren; ref?: React.Ref<any> | undefined; }> | undefined, state?: Readonly<{}> | undefined, context?: any): React.ComponentChildren {
         let Nbimpl=this.state.notebookViewerImpl??CodeMirrorNotebook;
-        return <Nbimpl context={this.props.context} path={this.props.path} switchNotebookViewerImpl={(impl)=>this.setState({notebookViewerImpl:impl})}/> 
+        return <Nbimpl contextRpc={this.props.context.rpc} notebookPath={this.props.path} onSwitchNotebookViewerImpl={(impl)=>this.setState({notebookViewerImpl:impl})}/> 
     }
 }
 
