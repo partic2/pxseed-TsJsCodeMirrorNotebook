@@ -179,6 +179,7 @@ export class CodeMirrorCodeCell<Props={}> extends CodeCell<Props&Partial<Pick<Co
     }
     renderCellInput(){
         return <NotebookCellTypescriptCodemirrorEditor ref={this.refCodeMirrorInputEditor}
+            divStyle={{border:'solid 1px grey'}}
             onGotoDefinitionOpenView={(def)=>this.onGotoDefinitionOpenView?.(def)}/>
     }
     async setAsEditTarget(){

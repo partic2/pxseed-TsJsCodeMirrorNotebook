@@ -1,6 +1,6 @@
 //worker.ts
 import { RpcSerializeMagicMark } from "partic2/pxprpcClient/pxseedremotefuncs";
-import ts from 'typescript'
+import type * as ts from 'typescript'
 import { type Diagnostic, type LintSource } from "partic2/codemirror2026/prebuilt/@codemirror-lint";
 import { assert, GetCurrentTime, logger, requirejs } from "partic2/jsutils1/base";
 import { getWWWRoot, path } from "partic2/jsutils1/webutils";
@@ -8,6 +8,14 @@ import { defaultFileSystem, ensureDefaultFileSystem, getSimpleFileSysteNormalize
 import { buildTjs } from "partic2/tjshelper/tjsbuilder";
 import { utf8conv } from "partic2/CodeRunner/jsutils2";
 import { AsyncMemorySystem, createAsyncMemorySystem } from "./vfs";
+
+let tsImpl:typeof ts;
+
+let __inited__=(async ()=>{
+    tsImpl=await import('partic2/prebuiltTypescript5d8/typescript' as any);
+})();
+
+
 
 let __name__ = requirejs.getLocalRequireModule(require);
 let log = logger.getLogger(__name__);
@@ -69,13 +77,13 @@ function tsCategoryToSeverity(
         return "warning";
     }
     switch (diagnostic.category) {
-        case ts.DiagnosticCategory.Error:
+        case tsImpl.DiagnosticCategory.Error:
             return "error";
-        case ts.DiagnosticCategory.Message:
+        case tsImpl.DiagnosticCategory.Message:
             return "info";
-        case ts.DiagnosticCategory.Warning:
+        case tsImpl.DiagnosticCategory.Warning:
             return "warning";
-        case ts.DiagnosticCategory.Suggestion:
+        case tsImpl.DiagnosticCategory.Suggestion:
             return "info";
     }
 }
@@ -118,10 +126,10 @@ class NodeLanguageServerEnvironment {
     languageService?: AsyncProxy<ts.LanguageService>
     openedScripts = new Map<string, { version: string, snapshot?: ts.IScriptSnapshot }>();
     compileSetting: ts.CompilerOptions = {
-        target: ts.ScriptTarget.ESNext,
-        module: ts.ModuleKind.ESNext,
+        target: tsImpl.ScriptTarget.ESNext,
+        module: tsImpl.ModuleKind.ESNext,
         lib: ["lib.dom.d.ts", "lib.es2021.d.ts"],
-        jsx: ts.JsxEmit.React,
+        jsx: tsImpl.JsxEmit.React,
         paths: {},
     }
     projectVersion = 0;
@@ -150,12 +158,15 @@ class NodeLanguageServerEnvironment {
     async initialize() {
         await this.initializeVfs();
         if (this.sys == undefined) {
-            this.sys = ts.sys;
+            this.sys = tsImpl.sys;
         }
         this.pxseedLibBaseDir = path.join(getSimpleFileSysteNormalizedWWWRoot(), '..', 'source');
         if (this.compileSetting.paths!['*'] == undefined) {
             this.compileSetting.paths!['*'] = [this.pxseedLibBaseDir + '/*'];
         }
+        let typesDir=path.join(this.pxseedLibBaseDir,'partic2','prebuiltTypescript5d8','types');
+        this.compileSetting.lib=this.compileSetting.lib!.map(t1=>path.join(typesDir,t1));
+
         this.lsHost = {
             getProjectVersion: () => String(this.projectVersion),
             getScriptFileNames: () => Array.from(this.openedScripts.keys()),
@@ -173,11 +184,11 @@ class NodeLanguageServerEnvironment {
                     return s.snapshot
                 }
                 if (!this.sys.fileExists(fileName)) return undefined;
-                return ts.ScriptSnapshot.fromString(this.sys.readFile(fileName) ?? '');
+                return tsImpl.ScriptSnapshot.fromString(this.sys.readFile(fileName) ?? '');
             },
             getCurrentDirectory: () => this.vfs?.rootDir ?? process.cwd(),
             getCompilationSettings: () => this.compileSetting,
-            getDefaultLibFileName: (options) => ts.getDefaultLibFilePath(options),
+            getDefaultLibFileName: (options) => tsImpl.getDefaultLibFilePath(options),
             fileExists: (path) => {
                 if (this.openedScripts.has(path)) {
                     return true;
@@ -189,7 +200,7 @@ class NodeLanguageServerEnvironment {
                 return (this.sys.readDirectory as any)(...argv);
             }
         };
-        this.languageService = createAsyncProxy(ts.createLanguageService(this.lsHost), async (fn, thisArg, args) => {
+        this.languageService = createAsyncProxy(tsImpl.createLanguageService(this.lsHost), async (fn, thisArg, args) => {
             let result = undefined;
             do {
                 result = await fn.apply(thisArg, args);
@@ -216,9 +227,9 @@ class NodeLanguageServerEnvironment {
             if (!node) return [];
 
             let target: ts.Node | undefined = node;
-            if (ts.isCallExpression(node)) target = node.expression;
-            else if (ts.isIdentifier(node)) target = node;
-            else if (node.parent && ts.isCallExpression(node.parent))
+            if (tsImpl.isCallExpression(node)) target = node.expression;
+            else if (tsImpl.isIdentifier(node)) target = node;
+            else if (node.parent && tsImpl.isCallExpression(node.parent))
                 target = node.parent.expression;
 
             if (!target) return [];
@@ -234,11 +245,11 @@ class NodeLanguageServerEnvironment {
                 const sigText = checker.signatureToString(
                     sig,
                     target,
-                    ts.TypeFormatFlags.NoTruncation |
-                    ts.TypeFormatFlags.WriteArrowStyleSignature,
+                    tsImpl.TypeFormatFlags.NoTruncation |
+                    tsImpl.TypeFormatFlags.WriteArrowStyleSignature,
                 );
                 const docs = sig.getDocumentationComment(checker);
-                const docText = ts.displayPartsToString(docs);
+                const docText = tsImpl.displayPartsToString(docs);
                 return { signature: sigText, documentation: docText };
             });
         } catch (e) {
@@ -272,16 +283,16 @@ class NodeLanguageServerEnvironment {
         this.projectVersion++;
         let f = this.openedScripts.get(fileName);
         if (f == undefined) {
-            let t1 = ts.ScriptSnapshot.fromString(content);
+            let t1 = tsImpl.ScriptSnapshot.fromString(content);
             this.openedScripts.set(fileName, { version: String(GetCurrentTime().getTime()), snapshot: t1 });
         } else if (range == undefined) {
-            let t1 = ts.ScriptSnapshot.fromString(content);
+            let t1 = tsImpl.ScriptSnapshot.fromString(content);
             f.snapshot = t1;
             f.version = String(GetCurrentTime().getTime())
         } else {
             let text = f.snapshot!.getText(0, f.snapshot!.getLength());
             text = text.substring(0, range[0]) + content + text.substring(range[1])
-            f.snapshot = ts.ScriptSnapshot.fromString(text);
+            f.snapshot = tsImpl.ScriptSnapshot.fromString(text);
             f.version = String(GetCurrentTime().getTime())
         }
     }
@@ -446,16 +457,16 @@ export class TsServerWorker {
         if (!sourceFile) return null;
 
         const node = env.findNodeAtPosition(sourceFile, position);
-        if (!node || !ts.isStringLiteral(node)) return null;
+        if (!node || !tsImpl.isStringLiteral(node)) return null;
 
         const parent = node.parent;
         let isModuleSpecifier = false;
-        if (ts.isImportDeclaration(parent) || ts.isExportDeclaration(parent)) {
+        if (tsImpl.isImportDeclaration(parent) || tsImpl.isExportDeclaration(parent)) {
             if (parent.moduleSpecifier !== node) return null;
             isModuleSpecifier = true;
         } else if (
-            ts.isCallExpression(parent) &&
-            parent.expression.kind === ts.SyntaxKind.ImportKeyword &&
+            tsImpl.isCallExpression(parent) &&
+            parent.expression.kind === tsImpl.SyntaxKind.ImportKeyword &&
             parent.arguments.length > 0 &&
             parent.arguments[0] === node
         ) {
@@ -502,7 +513,7 @@ export class TsServerWorker {
             }
             entries.push({
                 name: file.name + '/',
-                kind: ts.ScriptElementKind.moduleElement,
+                kind: tsImpl.ScriptElementKind.moduleElement,
                 kindModifiers: '',
                 sortText: '0' + file.name,
             });
@@ -619,7 +630,7 @@ export class TsServerWorker {
             if (
                 t1.name.startsWith(ExternalLiteralMagicMark) &&
                 node != undefined &&
-                ts.isStringLiteral(node)
+                tsImpl.isStringLiteral(node)
             ) {
                 if (magicLiteralFrom === undefined) {
                     magicLiteralFrom = node.getStart() + 1;
@@ -763,6 +774,7 @@ export class TsServerWorker {
 
 export let lastCreateTsServerWorker: TsServerWorker | null = null;
 export async function createTsServerWorker() {
+    await __inited__;
     lastCreateTsServerWorker = await new TsServerWorker(new NodeLanguageServerEnvironment()).initialize();
     return lastCreateTsServerWorker;
 }
