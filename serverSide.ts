@@ -2,10 +2,6 @@ import { GenerateRandomString, requirejs } from "partic2/jsutils1/base";
 import { path } from "partic2/jsutils1/webutils";
 import { defaultFileSystem, ensureDefaultFileSystem, getSimpleFileSysteNormalizedWWWRoot } from "partic2/CodeRunner/JsEnviron";
 import { Singleton, utf8conv } from "partic2/CodeRunner/jsutils2";
-import { PxseedExtendLanguageServer } from "partic2/typescriptLanguageServer2026/pxseedutils/lspproxy";
-import { RpcExtendClient1 } from "pxprpc/extend";
-import { Client } from "pxprpc/base";
-import { getAttachedRemoteRigstryFunction, importRemoteModule, RpcWorker } from "partic2/pxprpcClient/pxseedremotefuncs";
 
 
 let __name__ = requirejs.getLocalRequireModule(require);

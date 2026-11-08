@@ -15,6 +15,24 @@ let __inited__=(async ()=>{
     tsImpl=await import('partic2/prebuiltTypescript5d8/typescript' as any);
 })();
 
+if (typeof (globalThis as any).Intl === 'undefined') {
+    (globalThis as any).Intl = {};
+}
+if (typeof (globalThis as any).Intl.Collator === 'undefined') {
+    class SimpleCollator {
+        constructor(_locales?: any, _options?: any) {}
+        compare(a: string, b: string): number {
+            return a < b ? -1 : a > b ? 1 : 0;
+        }
+        resolvedOptions() {
+            return { locale: 'en', usage: 'sort', sensitivity: 'variant' };
+        }
+        static supportedLocalesOf(locales: string | string[]) {
+            return Array.isArray(locales) ? locales : [locales];
+        }
+    }
+    (globalThis as any).Intl.Collator = SimpleCollator;
+}
 
 
 let __name__ = requirejs.getLocalRequireModule(require);
@@ -104,6 +122,7 @@ type Invoker = (
     args: any[]
 ) => Promise<any> | any;
 
+
 export function createAsyncProxy<T extends object>(
     target: T,
     invoker: Invoker
@@ -186,9 +205,9 @@ class NodeLanguageServerEnvironment {
                 if (!this.sys.fileExists(fileName)) return undefined;
                 return tsImpl.ScriptSnapshot.fromString(this.sys.readFile(fileName) ?? '');
             },
-            getCurrentDirectory: () => this.vfs?.rootDir ?? process.cwd(),
+            getCurrentDirectory: () => this.vfs?.rootDir ?? '/',
             getCompilationSettings: () => this.compileSetting,
-            getDefaultLibFileName: (options) => tsImpl.getDefaultLibFilePath(options),
+            getDefaultLibFileName: (options) => path.join(typesDir,'lib.d.ts'),
             fileExists: (path) => {
                 if (this.openedScripts.has(path)) {
                     return true;
