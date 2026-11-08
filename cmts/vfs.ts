@@ -1,5 +1,4 @@
 import type * as ts from "typescript";
-import * as path from "path";
 
 import {SimpleFileSystem} from 'partic2/CodeRunner/JsEnviron'
 
@@ -57,13 +56,15 @@ export async function createAsyncMemorySystem(
     onWrite = () => {},
   } = options;
 
+  const {path}=await import('partic2/jsutils1/webutils');
+
   const decoder = new TextDecoder(options.encoding ?? "utf-8");
   const encoder = new TextEncoder();
   const rootDir = '/';
 
   // ---------- 路径规范化 ----------
   const normalize = (p: string): string => {
-    const resolved = path.posix.resolve(rootDir, p);
+    const resolved = p
     return useCaseSensitiveFileNames ? resolved : resolved.toLowerCase();
   };
 
@@ -176,7 +177,7 @@ export async function createAsyncMemorySystem(
         for (const [name, t] of d) {
           if (t === "dir") {
             queue.push({
-              key: path.posix.join(item.key, name),
+              key: path.join(item.key, name),
               depth: item.depth - 1,
             });
           }
@@ -216,10 +217,10 @@ export async function createAsyncMemorySystem(
   // ---------- 辅助：更新父目录条目 ----------
   /** 在 dirCache 的父目录 map 中登记这个 key 为文件（若父目录已加载） */
   function putFileEntry(key: string): void {
-    const parent = path.posix.dirname(key);
+    const parent = path.dirname(key);
     const parentMap = dirCache.get(parent);
     if (parentMap) {
-      const base = path.posix.basename(key);
+      const base = key.split(/\\\//).at(-1)??'';
       parentMap.set(useCaseSensitiveFileNames ? base : base.toLowerCase(), "file");
     }
   }
@@ -287,6 +288,20 @@ export async function createAsyncMemorySystem(
       const includeRes = (includes ?? []).map(globToRegExp);
       const excludeRes = (excludes ?? []).map(globToRegExp);
       const result: string[] = [];
+
+      function extname(filePath:string) {
+        if (typeof filePath !== 'string') {
+          throw new TypeError('The "path" argument must be of type string');
+        }
+        if (filePath.length === 0) return '';
+        
+        const basename = filePath.split(/\/\\/).at(-1)??'';
+        const dotIndex = basename.lastIndexOf('.');
+        
+        if (dotIndex <= 0) return '';
+        
+        return basename.slice(dotIndex);
+      }
     
       const walk = (dirKey: string, relPrefix: string, level: number) => {
         const d = dirCache.get(dirKey);
@@ -294,18 +309,19 @@ export async function createAsyncMemorySystem(
         for (const [name, t] of d) {
           const rel = relPrefix ? relPrefix + "/" + name : name;
           if (t === "dir") {
-            if (level < maxDepth) walk(path.posix.join(dirKey, name), rel, level + 1);
+            if (level < maxDepth) walk(path.join(dirKey, name), rel, level + 1);
             continue;
           }
           if (extSet && extSet.length > 0) {
-            const ext = path.posix.extname(name).toLowerCase();
+            
+            const ext = extname(name).toLowerCase();
             if (!extSet.includes(ext)) continue;
           }
           if (includeRes.length > 0 && !includeRes.some((r) => r.test(rel))) continue;
           if (excludeRes.some((r) => r.test(rel))) continue;
     
           // 关键：返回绝对路径，与 ts.sys 对齐
-          result.push(path.posix.join(base, rel));
+          result.push(path.join(base, rel));
         }
       };
     
@@ -327,9 +343,9 @@ export async function createAsyncMemorySystem(
 
     // ===== 路径 =====
     getCurrentDirectory: () => rootDir,
-    resolvePath: (p) => path.posix.resolve(rootDir, p),
-    getExecutingFilePath: () => path.posix.join(rootDir, "tsc.js"),
-    realpath: (p) => path.posix.resolve(rootDir, p),
+    resolvePath: (p) => path.join(p),
+    getExecutingFilePath: () => path.join(rootDir, "tsc.js"),
+    realpath: (p) => path.join(p),
 
     // ===== 控制台 =====
     write: (s) => onWrite(s),
