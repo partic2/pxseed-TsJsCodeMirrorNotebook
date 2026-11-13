@@ -12,6 +12,8 @@ import { TypescriptCodemirrorEditor } from './cmts/preact';
 import type { TsServerNameDefinition, TsServerWorker } from './cmts/worker';
 
 import * as cmv from 'partic2/codemirror2026/prebuilt/@codemirror-view';
+import * as cmac from 'partic2/codemirror2026/prebuilt/@codemirror-autocomplete';
+import ts from 'typescript';
 import { defaultTypescriptLanguageServiec, serverSide } from './webuiutils';
 import { NotebookViewer } from 'partic2/JsNotebook/notebook';
 import { rootWindowGroup } from 'partic2/pComponentUi/window';
@@ -136,6 +138,147 @@ export class NotebookCellTypescriptCodemirrorEditor<P={}> extends TypescriptCode
     override async onDocumentChangeInClass(update: cmv.ViewUpdate): Promise<void> {
         this.notebookControl?.onCellDocumentChange({editor:this});
         await super.onDocumentChangeInClass(update);
+    }
+
+    /**
+     * 把 worker 返回的 codeActions（FileTextChanges[]）应用到 notebook 的各个 cell 中。
+     * 从后往前应用，避免前面的修改影响后面的位置偏移。
+     */
+    applyCodeActions(codeActions: readonly ts.FileTextChanges[]) {
+        if (!codeActions || codeActions.length === 0) return;
+        const nc = this.notebookControl;
+        if (!nc) return;
+        // 收集所有 textChanges，按 start 降序排列
+        const allChanges: Array<{ span: ts.TextSpan, newText: string }> = [];
+        for (const fileChanges of codeActions) {
+            for (const tc of fileChanges.textChanges) {
+                allChanges.push({ span: tc.span, newText: tc.newText });
+            }
+        }
+        allChanges.sort((a, b) => b.span.start - a.span.start);
+        for (const tc of allChanges) {
+            const { start, length } = tc.span;
+            const newText = tc.newText;
+            let currOffset = 0;
+            for (const cell of nc.cells) {
+                const cellLen = nc.languageServiceDocumentLengthFor(cell);
+                if (start >= currOffset && start <= currOffset + cellLen) {
+                    const localStart = start - currOffset;
+                    const localEnd = localStart + length;
+                    if (cell.plainText) {
+                        const newContent =
+                            cell.plainText.text.slice(0, localStart) +
+                            newText +
+                            cell.plainText.text.slice(localEnd);
+                        cell.plainText.setText(newContent);
+                    } else if (cell.editor) {
+                        const view = cell.editor.codemirrorEditorView;
+                        if (view) {
+                            view.dispatch({
+                                changes: { from: localStart, to: localEnd, insert: newText },
+                            });
+                        }
+                    }
+                    break;
+                }
+                currOffset += cellLen;
+            }
+        }
+    }
+
+    /** 懒解析自动 import 的 codeActions 并应用（apply 内部调用，fire-and-forget） */
+    private async resolveAndApplyAutoImport(
+        posInVirtualFile: number,
+        entryName: string,
+        source?: string,
+        data?: unknown,
+    ) {
+        try {
+            if (this.tsserver == undefined) return;
+            const codeActions = await this.tsserver.resolveCompletionCodeActions({
+                uri: this.fileUri!,
+                pos: posInVirtualFile,
+                entryName,
+                source,
+                data,
+            });
+            if (codeActions && codeActions.length > 0) {
+                this.applyCodeActions(codeActions);
+            }
+        } catch (e) {
+            log.warning('resolveAndApplyAutoImport failed', e);
+        }
+    }
+
+    protected override async requestCompletion(context: cmac.CompletionContext): Promise<cmac.CompletionResult | null> {
+        return await this.remoteDocUpdating.exec(async () => {
+            if (this.tsserver == undefined) return null;
+            let offset = this.languageServiceDocumentRange()[0];
+            // 原始虚拟文件位置（补全请求时刻），apply 内部需要传给 getCompletionEntryDetails
+            const originalPos = context.pos + offset;
+            const cpinfo = await this.tsserver.getAutocompletion({
+                uri: this.fileUri!,
+                pos: originalPos,
+                explicit: context.explicit,
+            });
+            if (cpinfo == null) return null;
+            let cp = cpinfo.entries as Array<{
+                label: string; kind: string; details?: string;
+                source?: string;
+                hasAction?: true;
+                data?: unknown;
+                replacementSpan?: ts.TextSpan;
+            }>;
+            let from = cpinfo.from - offset;
+            const kindMap: Record<string, string> = {
+                'var': 'variable',
+                'module': 'namespace',
+                'const': 'constant',
+            };
+            const self = this;
+            const completionEntries = cp.map(t1 => {
+                const needsAutoImport = !!(t1.source || t1.hasAction);
+                const applyWithAutoImport = (dispatchChange: () => void) => {
+                    dispatchChange();
+                    if (needsAutoImport) {
+                        void self.resolveAndApplyAutoImport(
+                            originalPos, t1.label, t1.source, t1.data,
+                        );
+                    }
+                };
+
+                if (t1.replacementSpan) {
+                    const rsFrom = t1.replacementSpan.start - offset;
+                    const rsTo = rsFrom + t1.replacementSpan.length;
+                    return {
+                        label: t1.label,
+                        type: kindMap[String(t1.kind)] ?? t1.kind,
+                        detail: (t1.details ?? ''),
+                        apply: (_view: cmv.EditorView, _completion: cmac.Completion, _from: number, _to: number) => {
+                            applyWithAutoImport(() => _view.dispatch({
+                                changes: { from: rsFrom, to: rsTo, insert: t1.label },
+                            }));
+                        },
+                    } satisfies cmac.Completion;
+                } else {
+                    return {
+                        label: t1.label,
+                        type: kindMap[String(t1.kind)] ?? t1.kind,
+                        detail: (t1.details ?? ''),
+                        apply: (_view: cmv.EditorView, _completion: cmac.Completion, from2: number, to2: number) => {
+                            applyWithAutoImport(() => _view.dispatch({
+                                changes: { from: from2, to: to2, insert: t1.label },
+                            }));
+                        },
+                    } satisfies cmac.Completion;
+                }
+            });
+            let completionResult: cmac.CompletionResult = {
+                from, options: completionEntries,
+                validFor: /^\w*$/
+            };
+            return completionResult;
+        });
     }
 }
 

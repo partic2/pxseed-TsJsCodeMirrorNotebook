@@ -11,6 +11,7 @@ import { AsyncMemorySystem, createAsyncMemorySystem } from "./vfs";
 
 let tsImpl:typeof ts;
 
+
 let __inited__=(async ()=>{
     tsImpl=await import('partic2/prebuiltTypescript5d8/typescript' as any);
 })();
@@ -340,6 +341,8 @@ interface CustomModuleExports {
 
 // ============================================================
 // 外部字面量类型注册表
+// 字面量样式：ExternalLiteralMagicMark+key
+// 例：@@ExternalLiteralMagicMark@@DefaultSimpleFileSystemPath
 // ============================================================
 export let externalLiteralTypeRegistry = new Map<string, {
     getAutocompletion?:(a0:{
@@ -599,6 +602,18 @@ export class TsServerWorker {
         // 光标处节点：import 路径补全和外部字面量补全共用
         const node = env.findNodeAtPosition(sourceFile, pos);
 
+        // 封装：把 CompletionEntry 映射成客户端格式（lazy codeActions）
+        const mapEntry = (t1: ts.CompletionEntry) => ({
+            label: t1.name,
+            kind: t1.kind,
+            details: (t1 as any).labelDetails?.detail,
+            // 用于延迟解析 codeActions（自动 import / hasAction）
+            source: (t1 as any).source as string | undefined,
+            hasAction: (t1 as any).hasAction as true | undefined,
+            data: (t1 as any).data as unknown,
+            replacementSpan: t1.replacementSpan,
+        });
+
         // 1. import 模块说明符：目录补全
         const importCtx = await this.getImportStringContext(path, pos);
         if (importCtx) {
@@ -613,18 +628,12 @@ export class TsServerWorker {
                 },
                 {},
             );
-            const baseEntries = baseInfo?.entries ?? [];
+            const baseMapped = (baseInfo?.entries ?? []).map(mapEntry);
+            const dirMapped = dirEntries.map(mapEntry);
 
-            const merged: ts.CompletionEntry[] = [...dirEntries, ...baseEntries];
+            const merged = [...dirMapped, ...baseMapped];
             if (merged.length > 0) {
-                return {
-                    from: segmentStart,
-                    entries: merged.map(t1 => ({
-                        label: t1.name,
-                        kind: t1.kind,
-                        details: (t1 as any).labelDetails?.detail
-                    })),
-                };
+                return { from: segmentStart, entries: merged };
             }
             // 继续走默认逻辑
         }
@@ -640,12 +649,21 @@ export class TsServerWorker {
         );
         if (!completionInfo) return null;
 
-        const entries = new Array<{ label: string; kind: string; details?: string }>();
+        type EntryOut = {
+            label: string;
+            kind: string;
+            details?: string;
+            source?: string;
+            hasAction?: true;
+            data?: unknown;
+            replacementSpan?: ts.TextSpan;
+        };
+        const entries: EntryOut[] = [];
         // 若产生外部字面量补全，from 必须锚定到字面量内部起点，
         // 否则 label（完整路径）会被插到光标位置导致路径重复。
         let magicLiteralFrom: number | undefined = undefined;
 
-        for (let t1 of completionInfo.entries) {
+        for (const t1 of completionInfo.entries) {
             if (
                 t1.name.startsWith(ExternalLiteralMagicMark) &&
                 node != undefined &&
@@ -655,21 +673,21 @@ export class TsServerWorker {
                     magicLiteralFrom = node.getStart() + 1;
                 }
                 const literalSourceName = t1.name.substring(ExternalLiteralMagicMark.length);
-                const source = externalLiteralTypeRegistry.get(literalSourceName);
-                if (source?.getAutocompletion != undefined) {
-                    for (const t2 of await source.getAutocompletion({
+                const registrySource = externalLiteralTypeRegistry.get(literalSourceName);
+                if (registrySource?.getAutocompletion != undefined) {
+                    for (const t2 of await registrySource.getAutocompletion({
                         uri, pos, explicit, tsserver: this, node,
                     })) {
                         if (t2.kind == undefined) t2.kind = 'literal';
-                        entries.push(t2 as any);
+                        entries.push({
+                            label: t2.label,
+                            kind: t2.kind,
+                            details: t2.details,
+                        });
                     }
                 }
             } else {
-                entries.push({
-                    label: t1.name,
-                    kind: t1.kind,
-                    details: t1.labelDetails?.detail,
-                });
+                entries.push(mapEntry(t1));
             }
         }
 
@@ -679,6 +697,30 @@ export class TsServerWorker {
                 : completionInfo.optionalReplacementSpan?.start ?? pos;
 
         return { from, entries };
+    }
+
+    /** 懒解析单个 completion entry 的 codeActions（自动 import 所需） */
+    async resolveCompletionCodeActions({
+        uri, pos, entryName, source, data,
+    }: {
+        uri: string;
+        pos: number;
+        entryName: string;
+        source?: string;
+        data?: unknown;
+    }): Promise<readonly ts.FileTextChanges[] | undefined> {
+        const path = this.convertUriToPath(uri);
+        const env = this.env;
+        if (!env) return undefined;
+        try {
+            const details = await env.languageService!.getCompletionEntryDetails(
+                path, pos, entryName, {}, source, undefined, data as any,
+            );
+            return details?.codeActions?.flatMap(a => a.changes);
+        } catch (e) {
+            log.warning('resolveCompletionCodeActions failed', e);
+            return undefined;
+        }
     }
 
     async getHover({ uri, pos }: { uri: string; pos: number }) {
